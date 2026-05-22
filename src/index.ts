@@ -190,41 +190,6 @@ bot.command("digest", async (ctx) => {
   await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
 });
 
-// Auto-import history when bot is added to a group and MTProto is configured
-bot.on("my_chat_member", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) return;
-
-  const oldStatus = ctx.oldChatMember?.status;
-  const newStatus = ctx.newChatMember?.status;
-
-  // Bot was just added to the group
-  if (oldStatus !== "member" && newStatus === "member") {
-    const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
-
-    if (await isMtProtoConfigured()) {
-      // Silent import in background
-      (async () => {
-        try {
-          await importChatHistory(chatHistory, chat.id, { limit: MAX_CHAT_HISTORY });
-        } catch (error) {
-          console.error("Auto MTProto import error:", error);
-        }
-      })();
-    }
-  }
-});
-
-// Handle file uploads for chat dump import
-bot.on("message", async (ctx) => {
-  if (!ctx.chat) return;
-
-  const fileName = ctx.document?.fileName?.toLowerCase() || "";
-  if (fileName.endsWith(".json") || fileName.endsWith(".csv")) {
-    await ctx.reply(`📁 Получен файл ${fileName}. Импорт в разработке.`);
-  }
-});
-
 // In-memory store for pending MTProto auth promises
 const pendingAuthCodes = new Map<
   number,
@@ -259,10 +224,17 @@ bot.command("connect_account", async (ctx) => {
     for (const chatId of allChatIds.slice(0, 10)) {
       const stats = await chatHistory.getChatStats(chatId);
       if (stats.total > 0) {
+        let chatName: string;
+        try {
+          const chatInfo = await bot.api.getChat({ chat_id: chatId });
+          chatName = "title" in chatInfo ? chatInfo.title || String(chatId) : String(chatId);
+        } catch {
+          chatName = String(chatId);
+        }
         const earliest = stats.earliestDate ? stats.earliestDate.toLocaleDateString("ru-RU") : "?";
         const latest = stats.latestDate ? stats.latestDate.toLocaleDateString("ru-RU") : "?";
         const pct = Math.min((stats.total / MAX_CHAT_HISTORY) * 100, 100).toFixed(1);
-        statusText += `• Чат ${chatId}: <b>${stats.total}</b> сообщений (${pct}%)\n  с ${earliest} по ${latest}\n\n`;
+        statusText += `• <b>${chatName}</b>: ${stats.total} сообщений (${pct}%)\n  с ${earliest} по ${latest}\n\n`;
       }
     }
   }
@@ -323,11 +295,37 @@ bot.on("message", async (ctx) => {
         },
       });
 
-      await ctx.reply(
-        "✅ <b>Аккаунт успешно подключен!</b>\n\n" +
-          "Теперь при добавлении бота в группу история будет импортироваться автоматически.",
-        { parse_mode: "HTML" },
-      );
+      await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
+
+      // Auto-import history from all user groups
+      const { getUserGroups, importChatHistory } = await import("./services/mtproto");
+      const groups = await getUserGroups();
+
+      if (groups.length === 0) {
+        await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
+      } else {
+        await ctx.reply(`📥 Найдено ${groups.length} групп. Начинаю импорт истории в фоне...`);
+
+        for (const group of groups) {
+          (async () => {
+            try {
+              const result = await importChatHistory(chatHistory, group.id, {
+                limit: MAX_CHAT_HISTORY,
+              });
+              console.log(
+                `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
+              );
+            } catch (err) {
+              console.error(`Failed to import ${group.title}:`, err);
+            }
+          })();
+        }
+
+        await ctx.reply(
+          `🚀 Импорт запущен для ${groups.length} групп.\n\n` +
+            "История будет доступна для /summary и /search.",
+        );
+      }
     } catch (error) {
       pendingAuthCodes.delete(userId);
       console.error("MTProto auth error:", error);
@@ -336,6 +334,41 @@ bot.on("message", async (ctx) => {
       );
     }
     return;
+  }
+});
+
+// Auto-import history when bot is added to a group and MTProto is configured
+bot.on("my_chat_member", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) return;
+
+  const oldStatus = ctx.oldChatMember?.status;
+  const newStatus = ctx.newChatMember?.status;
+
+  // Bot was just added to the group
+  if (oldStatus !== "member" && newStatus === "member") {
+    const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
+
+    if (await isMtProtoConfigured()) {
+      // Silent import in background
+      (async () => {
+        try {
+          await importChatHistory(chatHistory, chat.id, { limit: MAX_CHAT_HISTORY });
+        } catch (error) {
+          console.error("Auto MTProto import error:", error);
+        }
+      })();
+    }
+  }
+});
+
+// Handle file uploads for chat dump import
+bot.on("message", async (ctx) => {
+  if (!ctx.chat) return;
+
+  const fileName = ctx.document?.fileName?.toLowerCase() || "";
+  if (fileName.endsWith(".json") || fileName.endsWith(".csv")) {
+    await ctx.reply(`📁 Получен файл ${fileName}. Импорт в разработке.`);
   }
 });
 

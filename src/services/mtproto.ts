@@ -101,6 +101,48 @@ export async function importChatHistory(
   return { imported, skipped };
 }
 
+export async function getUserGroups(): Promise<Array<{ id: number; title: string }>> {
+  const client = getClient();
+  await client.start();
+
+  const result = await client.call({
+    _: "messages.getDialogs",
+    limit: 100,
+    offsetDate: 0,
+    offsetId: 0,
+    offsetPeer: { _: "inputPeerEmpty" },
+    hash: 0 as any,
+  });
+
+  const dialogs = (result as any).dialogs || [];
+  const chats = (result as any).chats || [];
+  const chatMap = new Map<number, string>();
+
+  for (const chat of chats) {
+    if (chat._ === "chat" || chat._ === "channel") {
+      chatMap.set(chat.id, chat.title || "Unknown");
+    }
+  }
+
+  const groups: Array<{ id: number; title: string }> = [];
+  for (const dialog of dialogs) {
+    const peer = dialog.peer;
+    let chatId: number | null = null;
+
+    if (peer?._ === "peerChat") {
+      chatId = peer.chatId;
+    } else if (peer?._ === "peerChannel") {
+      chatId = peer.channelId;
+    }
+
+    if (chatId && chatMap.has(chatId)) {
+      groups.push({ id: chatId, title: chatMap.get(chatId)! });
+    }
+  }
+
+  return groups;
+}
+
 export async function isMtProtoConfigured(): Promise<boolean> {
   return !!(config.MTPROTO_API_ID && config.MTPROTO_API_HASH);
 }
