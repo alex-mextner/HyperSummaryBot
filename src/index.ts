@@ -4,6 +4,7 @@ import { sqliteStorage } from "@gramio/storage-sqlite";
 import { loadConfig } from "./config/env";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
+import { generateSummary, type SummaryType } from "./agents/summary";
 
 const config = loadConfig();
 
@@ -11,7 +12,7 @@ const config = loadConfig();
 const db = initDatabase(config.DATABASE_PATH);
 const chatHistory = new ChatHistoryRepository(db);
 
-// Create bot
+// Create bot with derive for typed context
 const bot = new Bot(config.BOT_TOKEN)
   .extend(
     session({
@@ -59,6 +60,146 @@ bot.command("help", async (ctx) => {
       "Просто добавь меня в группу и используй команды!",
     { parse_mode: "HTML" },
   );
+});
+
+bot.command("summary", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
+    await ctx.reply("Эта команда работает только в группах.");
+    return;
+  }
+
+  const args = ctx.text?.split(" ").slice(1) || [];
+  const type = (args[0] as SummaryType) || "general";
+  const count = Math.min(Number.parseInt(args[1] || "50", 10), 200);
+
+  await ctx.reply(`📊 Генерирую саммари типа "${type}" за последние ${count} сообщений...`);
+
+  try {
+    const messages = await ctx.chatHistory.getRecent(chat.id, count);
+
+    if (messages.length === 0) {
+      await ctx.reply("Нет сообщений для анализа.");
+      return;
+    }
+
+    const formattedMessages = messages.map((m) => ({
+      userName: m.userName,
+      content: m.content,
+    }));
+
+    await generateSummary({
+      chatId: chat.id,
+      messages: formattedMessages,
+      type,
+      bot,
+    });
+  } catch (error) {
+    console.error("Summary error:", error);
+    await ctx.reply("❌ Ошибка при генерации саммари. Попробуйте позже.");
+  }
+});
+
+bot.command("ask", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat) return;
+
+  const question = ctx.text?.split(" ").slice(1).join(" ") || "";
+  if (!question.trim()) {
+    await ctx.reply("❓ Задайте вопрос: /ask <ваш вопрос>");
+    return;
+  }
+
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  await ctx.reply("🤔 Анализирую вопрос...");
+
+  try {
+    const messages = await ctx.chatHistory.getRecent(chat.id, 100);
+
+    try {
+      await bot.api.sendMessage({
+        chat_id: userId,
+        text: `🔍 <b>Вопрос:</b> ${question}\n\n<i>Анализирую ${messages.length} сообщений...</i>`,
+        parse_mode: "HTML",
+      });
+    } catch {
+      await ctx.reply("Откройте ЛС со мной, чтобы получить ответ.");
+      return;
+    }
+
+    // TODO: Implement QA agent with streaming
+    await bot.api.sendMessage({
+      chat_id: userId,
+      text: `📋 <b>Ответ на ваш вопрос:</b>\n\n${question}\n\n(Агент в разработке)`,
+      parse_mode: "HTML",
+    });
+  } catch (error) {
+    console.error("Ask error:", error);
+    await ctx.reply("❌ Ошибка при обработке вопроса.");
+  }
+});
+
+bot.command("search", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
+    await ctx.reply("Эта команда работает только в группах.");
+    return;
+  }
+
+  const query = ctx.text?.split(" ").slice(1).join(" ") || "";
+  if (!query.trim()) {
+    await ctx.reply("🔍 Введите запрос: /search <текст>");
+    return;
+  }
+
+  await ctx.reply(`🔍 Ищу: "${query}"...`);
+
+  try {
+    const messages = await ctx.chatHistory.getRecent(chat.id, 99999);
+    const results = messages.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()));
+
+    if (results.length === 0) {
+      await ctx.reply("Ничего не найдено.");
+      return;
+    }
+
+    const formatted = results
+      .slice(0, 20)
+      .map((m) => `${m.userName}: ${m.content.slice(0, 200)}`)
+      .join("\n\n");
+
+    await ctx.reply(`🔍 <b>Результаты (${results.length}):</b>\n\n${formatted}`, {
+      parse_mode: "HTML",
+    });
+  } catch (error) {
+    console.error("Search error:", error);
+    await ctx.reply("❌ Ошибка при поиске.");
+  }
+});
+
+bot.command("note", async (ctx) => {
+  await ctx.reply("📝 Извлечение заметок в разработке. Скоро будет доступно!");
+});
+
+bot.command("config", async (ctx) => {
+  await ctx.reply(
+    "⚙️ <b>Настройки</b>\n\n" +
+      "Доступные параметры:\n" +
+      "• Язык: автоматически\n" +
+      "• Стиль саммари: подробный\n" +
+      "• Хранение: 99999 сообщений\n\n" +
+      "(Расширенные настройки в разработке)",
+    { parse_mode: "HTML" },
+  );
+});
+
+bot.command("digest", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
 });
 
 // Store incoming messages
