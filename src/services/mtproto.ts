@@ -1,5 +1,6 @@
 import { TelegramClient } from "@mtcute/bun";
 import { loadConfig } from "../config/env";
+import { MAX_CHAT_HISTORY } from "../config/constants";
 import type { ChatHistoryRepository } from "../db/repositories/chat-history";
 
 const config = loadConfig();
@@ -38,7 +39,7 @@ export async function importChatHistory(
   const peer = await client.resolvePeer(chatId);
 
   // Fetch messages
-  const limit = Math.min(options.limit ?? 1000, 10000);
+  const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
   const messages: any[] = [];
   let offsetId = 0;
 

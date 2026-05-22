@@ -2,6 +2,7 @@ import { Bot } from "gramio";
 import { session } from "@gramio/session";
 import { sqliteStorage } from "@gramio/storage-sqlite";
 import { loadConfig } from "./config/env";
+import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary, type SummaryType } from "./agents/summary";
@@ -202,23 +203,14 @@ bot.on("my_chat_member", async (ctx) => {
     const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
 
     if (await isMtProtoConfigured()) {
-      await ctx.reply("📥 MTProto настроен. Импортирую историю чата...");
-
-      try {
-        const result = await importChatHistory(chatHistory, chat.id, { limit: 1000 });
-        await ctx.reply(
-          `✅ Импорт завершен!\n\n` +
-            `• Импортировано: ${result.imported}\n` +
-            `• Пропущено (уже есть): ${result.skipped}\n\n` +
-            `Теперь можно использовать /summary`,
-        );
-      } catch (error) {
-        console.error("Auto MTProto import error:", error);
-        await ctx.reply(
-          `⚠️ Не удалось импортировать историю: ${error instanceof Error ? error.message : "Unknown error"}\n\n` +
-            "Для ручного импорта авторизуйтесь в MTProto через консоль сервера.",
-        );
-      }
+      // Silent import in background
+      (async () => {
+        try {
+          await importChatHistory(chatHistory, chat.id, { limit: MAX_CHAT_HISTORY });
+        } catch (error) {
+          console.error("Auto MTProto import error:", error);
+        }
+      })();
     }
   }
 });
@@ -230,6 +222,120 @@ bot.on("message", async (ctx) => {
   const fileName = ctx.document?.fileName?.toLowerCase() || "";
   if (fileName.endsWith(".json") || fileName.endsWith(".csv")) {
     await ctx.reply(`📁 Получен файл ${fileName}. Импорт в разработке.`);
+  }
+});
+
+// In-memory store for pending MTProto auth promises
+const pendingAuthCodes = new Map<
+  number,
+  { resolve: (code: string) => void; reject: (err: Error) => void }
+>();
+
+// MTProto account connection (DM only)
+bot.command("connect_account", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || chat.type !== "private") {
+    await ctx.reply("Эта команда работает только в личных сообщениях со мной.");
+    return;
+  }
+
+  const { isMtProtoConfigured } = await import("./services/mtproto");
+
+  if (!(await isMtProtoConfigured())) {
+    await ctx.reply(
+      "⚠️ MTProto не настроен на сервере.\n\n" +
+        "Администратор должен добавить MTPROTO_API_ID и MTPROTO_API_HASH в .env",
+    );
+    return;
+  }
+
+  // Show import status for all chats
+  const allChatIds = await chatHistory.getAllChatIds();
+  let statusText = "📊 <b>Статус импорта истории</b>\n\n";
+
+  if (allChatIds.length === 0) {
+    statusText += "История еще не импортирована ни в один чат.\n\n";
+  } else {
+    for (const chatId of allChatIds.slice(0, 10)) {
+      const stats = await chatHistory.getChatStats(chatId);
+      if (stats.total > 0) {
+        const earliest = stats.earliestDate ? stats.earliestDate.toLocaleDateString("ru-RU") : "?";
+        const latest = stats.latestDate ? stats.latestDate.toLocaleDateString("ru-RU") : "?";
+        const pct = Math.min((stats.total / MAX_CHAT_HISTORY) * 100, 100).toFixed(1);
+        statusText += `• Чат ${chatId}: <b>${stats.total}</b> сообщений (${pct}%)\n  с ${earliest} по ${latest}\n\n`;
+      }
+    }
+  }
+
+  statusText +=
+    "🔐 <b>Подключение Telegram аккаунта</b>\n\n" +
+    "Это нужно для импорта истории чатов до момента добавления бота.\n\n" +
+    "Отправьте ваш номер телефона в формате <code>+79123456789</code>:";
+
+  await ctx.reply(statusText, { parse_mode: "HTML" });
+});
+
+// Handle MTProto auth flow in DMs
+bot.on("message", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || chat.type !== "private") return;
+
+  const text = ctx.text || "";
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  // Check if user has a pending code promise
+  const pendingAuth = pendingAuthCodes.get(userId);
+  if (pendingAuth) {
+    const code = text.trim().replace(/-/g, "");
+    pendingAuth.resolve(code);
+    pendingAuthCodes.delete(userId);
+    return;
+  }
+
+  // Handle phone number input for MTProto auth
+  if (/^\+\d{10,15}$/.test(text.trim())) {
+    const phone = text.trim();
+
+    await ctx.reply(`📱 Номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...");
+
+    try {
+      const { TelegramClient } = await import("@mtcute/bun");
+      const client = new TelegramClient({
+        apiId: config.MTPROTO_API_ID!,
+        apiHash: config.MTPROTO_API_HASH!,
+        storage: "data/mtcute-session",
+      });
+
+      // Start auth and wait for code
+      await client.start({
+        phone,
+        code: async () => {
+          await ctx.reply(
+            "🔑 <b>Код отправлен в Telegram</b>\n\n" +
+              "Введите код из сообщения от Telegram (без дефисов):",
+            { parse_mode: "HTML" },
+          );
+
+          return new Promise<string>((resolve, reject) => {
+            pendingAuthCodes.set(userId, { resolve, reject });
+          });
+        },
+      });
+
+      await ctx.reply(
+        "✅ <b>Аккаунт успешно подключен!</b>\n\n" +
+          "Теперь при добавлении бота в группу история будет импортироваться автоматически.",
+        { parse_mode: "HTML" },
+      );
+    } catch (error) {
+      pendingAuthCodes.delete(userId);
+      console.error("MTProto auth error:", error);
+      await ctx.reply(
+        `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+    return;
   }
 });
 
@@ -321,6 +427,10 @@ async function registerBotCommands() {
       { command: "search", description: "🔍 Search messages by text" },
       { command: "note", description: "📝 Extract useful note to Notion" },
       { command: "digest", description: "📬 Request digest (sent to DM)" },
+      {
+        command: "connect_account",
+        description: "🔐 Connect Telegram account for MTProto (DM only)",
+      },
     ],
   });
   console.log("✅ Bot commands registered");

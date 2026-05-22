@@ -95,6 +95,49 @@ export class ChatHistoryRepository {
     return 0; // Drizzle doesn't return changes count, query affects rows
   }
 
+  async getAllChatIds(): Promise<number[]> {
+    const result = await this.db
+      .select({ chatId: messages.chatId })
+      .from(messages)
+      .groupBy(messages.chatId);
+    return result.map((r) => r.chatId);
+  }
+
+  async getChatStats(
+    chatId: number,
+  ): Promise<{ total: number; earliestDate: Date | null; latestDate: Date | null }> {
+    const countResult = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(messages)
+      .where(eq(messages.chatId, chatId));
+
+    const total = countResult[0]?.count ?? 0;
+
+    if (total === 0) {
+      return { total: 0, earliestDate: null, latestDate: null };
+    }
+
+    const earliest = await this.db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(messages.createdAt)
+      .limit(1);
+
+    const latest = await this.db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return {
+      total,
+      earliestDate: earliest[0]?.createdAt ?? null,
+      latestDate: latest[0]?.createdAt ?? null,
+    };
+  }
+
   private mapRow(row: typeof messages.$inferSelect): ChatMessage {
     return {
       id: row.id,
