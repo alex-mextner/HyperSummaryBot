@@ -214,7 +214,34 @@ bot.on("message", async (ctx) => {
 
   // Handle voice messages
   if (ctx.voice) {
-    content = "[Voice message]";
+    content = "[Voice message - transcribing...]";
+
+    // Transcribe asynchronously
+    (async () => {
+      try {
+        const fileInfo = await bot.api.getFile({ file_id: ctx.voice!.fileId });
+        if (fileInfo.file_path) {
+          const fileUrl = `https://api.telegram.org/file/bot${config.BOT_TOKEN}/${fileInfo.file_path}`;
+          const response = await fetch(fileUrl);
+          const arrayBuffer = await response.arrayBuffer();
+
+          const { transcribeAudio } = await import("./services/ai/voice");
+          const transcription = await transcribeAudio(arrayBuffer);
+
+          // Update message content with transcription, preserving reply/forward context
+          const prefix = content.split("🎙")[0]; // Keep any "Reply to..." or "Forwarded from..." prefix
+          const transcribedContent = `${prefix}🎙 <i>Voice message:</i> ${transcription.text}`;
+          await chatHistory.updateContent(chat.id, ctx.id, transcribedContent);
+
+          console.log(
+            `Transcribed voice message ${ctx.id}: ${transcription.text.slice(0, 100)}...`,
+          );
+        }
+      } catch (error) {
+        console.error("Voice transcription error:", error);
+        await chatHistory.updateContent(chat.id, ctx.id, "[Voice message - transcription failed]");
+      }
+    })();
   }
 
   // Forward enrichment
