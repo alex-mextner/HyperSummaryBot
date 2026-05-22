@@ -41,7 +41,6 @@ bot.command("start", async (ctx) => {
       "/ask — Задать вопрос по истории чата (в ЛС)\n" +
       "/search — Поиск по истории\n" +
       "/note — Извлечь полезную заметку\n" +
-      "/config — Настройки чата\n" +
       "/digest — Получить дайджест (в ЛС)\n" +
       "/help — Помощь",
     { parse_mode: "HTML" },
@@ -181,18 +180,6 @@ bot.command("search", async (ctx) => {
 
 bot.command("note", async (ctx) => {
   await ctx.reply("📝 Извлечение заметок в разработке. Скоро будет доступно!");
-});
-
-bot.command("config", async (ctx) => {
-  await ctx.reply(
-    "⚙️ <b>Настройки</b>\n\n" +
-      "Доступные параметры:\n" +
-      "• Язык: автоматически\n" +
-      "• Стиль саммари: подробный\n" +
-      "• Хранение: 99999 сообщений\n\n" +
-      "(Расширенные настройки в разработке)",
-    { parse_mode: "HTML" },
-  );
 });
 
 bot.command("digest", async (ctx) => {
@@ -342,7 +329,6 @@ async function registerBotCommands() {
       { command: "ask", description: "❓ Ask a question about chat history (answers in DM)" },
       { command: "search", description: "🔍 Search messages by text" },
       { command: "note", description: "📝 Extract useful note to Notion" },
-      { command: "config", description: "⚙️ Chat settings" },
       { command: "digest", description: "📬 Request digest (sent to DM)" },
       { command: "import_history", description: "📥 Import chat history via MTProto" },
     ],
