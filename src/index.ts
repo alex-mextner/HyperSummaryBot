@@ -189,46 +189,37 @@ bot.command("digest", async (ctx) => {
   await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
 });
 
-bot.command("import_history", async (ctx) => {
+// Auto-import history when bot is added to a group and MTProto is configured
+bot.on("my_chat_member", async (ctx) => {
   const chat = ctx.chat;
-  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
-    await ctx.reply("Эта команда работает только в группах.");
-    return;
-  }
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) return;
 
-  const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
+  const oldStatus = ctx.oldChatMember?.status;
+  const newStatus = ctx.newChatMember?.status;
 
-  if (!(await isMtProtoConfigured())) {
-    await ctx.reply(
-      "⚠️ MTProto не настроен.\n\n" +
-        "Для импорта истории до добавления бота нужно:\n" +
-        "1. Получить api_id и api_hash на https://my.telegram.org\n" +
-        "2. Добавить их в .env:\n" +
-        "   MTPROTO_API_ID=12345\n" +
-        "   MTPROTO_API_HASH=your_hash\n" +
-        "3. Перезапустить бота",
-    );
-    return;
-  }
+  // Bot was just added to the group
+  if (oldStatus !== "member" && newStatus === "member") {
+    const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
 
-  const args = ctx.text?.split(" ").slice(1) || [];
-  const limit = Math.min(Number.parseInt(args[0] || "500", 10), 5000);
+    if (await isMtProtoConfigured()) {
+      await ctx.reply("📥 MTProto настроен. Импортирую историю чата...");
 
-  await ctx.reply(`📥 Импортирую до ${limit} сообщений через MTProto... Это может занять время.`);
-
-  try {
-    const result = await importChatHistory(chatHistory, chat.id, { limit });
-    await ctx.reply(
-      `✅ Импорт завершен!\n\n` +
-        `• Импортировано: ${result.imported}\n` +
-        `• Пропущено (уже есть): ${result.skipped}`,
-    );
-  } catch (error) {
-    console.error("MTProto import error:", error);
-    await ctx.reply(
-      `❌ Ошибка импорта: ${error instanceof Error ? error.message : "Unknown error"}\n\n` +
-        "Если это первый запуск MTProto — авторизуйтесь через консоль сервера.",
-    );
+      try {
+        const result = await importChatHistory(chatHistory, chat.id, { limit: 1000 });
+        await ctx.reply(
+          `✅ Импорт завершен!\n\n` +
+            `• Импортировано: ${result.imported}\n` +
+            `• Пропущено (уже есть): ${result.skipped}\n\n` +
+            `Теперь можно использовать /summary`,
+        );
+      } catch (error) {
+        console.error("Auto MTProto import error:", error);
+        await ctx.reply(
+          `⚠️ Не удалось импортировать историю: ${error instanceof Error ? error.message : "Unknown error"}\n\n` +
+            "Для ручного импорта авторизуйтесь в MTProto через консоль сервера.",
+        );
+      }
+    }
   }
 });
 
@@ -330,7 +321,6 @@ async function registerBotCommands() {
       { command: "search", description: "🔍 Search messages by text" },
       { command: "note", description: "📝 Extract useful note to Notion" },
       { command: "digest", description: "📬 Request digest (sent to DM)" },
-      { command: "import_history", description: "📥 Import chat history via MTProto" },
     ],
   });
   console.log("✅ Bot commands registered");
