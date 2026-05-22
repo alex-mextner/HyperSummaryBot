@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+*.lockb
+
+# Build outputs
+dist/
+*.exe
+bot
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data and logs
+data/
+logs/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

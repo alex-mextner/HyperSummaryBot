@@ -1,0 +1,44 @@
+{
+  "name": "hyper-summary-bot",
+  "version": "0.1.0",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "bun build --compile --outfile=bot src/index.ts",
+    "lint": "oxlint src/",
+    "lint:fix": "oxlint src/ --fix",
+    "fmt": "oxfmt src/",
+    "fmt:check": "oxfmt src/ --check",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "test": "bun test",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "gramio": "latest",
+    "openai": "latest",
+    "drizzle-orm": "latest",
+    "drizzle-kit": "latest",
+    "telegramify-markdown": "latest",
+    "@gramio/session": "latest",
+    "@gramio/storage-sqlite": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5",
+    "oxlint": "latest",
+    "oxfmt": "latest",
+    "husky": "latest",
+    "lint-staged": "latest"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "oxfmt --write",
+      "oxlint --fix"
+    ]
+  }
+}

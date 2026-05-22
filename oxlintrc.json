@@ -1,0 +1,17 @@
+{
+  "rules": {
+    "no-console": "warn",
+    "no-debugger": "error",
+    "no-unused-vars": "error",
+    "no-undef": "error",
+    "no-var": "error",
+    "prefer-const": "warn",
+    "eqeqeq": "error",
+    "no-throw-literal": "error",
+    "no-restricted-globals": ["error", "console"]
+  },
+  "env": {
+    "node": true,
+    "esnext": true
+  }
+}
