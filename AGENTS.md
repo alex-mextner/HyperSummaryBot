@@ -102,12 +102,23 @@ In GramIO, **handler order matters**. First matching handler processes the messa
 - Handle `.catch()` on fire-and-forget promises — at minimum log the error
 
 ## Git Workflow
-- Atomic commits with clear messages
-- Use `codex exec review --uncommitted` before each commit for sanity check
-- Pre-commit hooks: lint + format (lint-staged)
-- CI runs on every push: type-check, lint, format-check
-- Deploy via GitHub Actions → SSH → PM2 reload
-- Never `git add -A` without checking `git status` first
+
+**Mandatory before every commit (4-stage review, NEVER skip even if user says "commit"):**
+
+1. **Self-review** — read your diff (`git diff --staged`), question every line
+2. **Type-check + lint** — `bun x tsc --noEmit` + `bun run lint` must pass clean (zero errors, zero warnings)
+3. **Codex AI review** — `codex exec review --uncommitted` → address every real issue
+4. **Tests** — `bun test` (or scoped subset) must pass green
+
+**If codex CLI is unavailable:** skip step 3 but do NOT skip the self-review in step 1. Codex is a sanity check, not a rubber stamp.
+
+**Atomic commits:** one logical change = one commit. Never batch unrelated changes. Each commit must leave the tree green (type-check + lint + tests pass).
+
+**Never `git add -A`** without checking `git status` first.
+
+**Pre-commit hooks:** lint-staged runs oxfmt + oxlint automatically.
+
+**CI/CD:** GitHub Actions → SSH → PM2 reload on every push to main.
 
 ## Multi-Provider AI Setup
 - All providers use OpenAI SDK with different `baseURL`/`apiKey`
