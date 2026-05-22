@@ -13,6 +13,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
+    "noImplicitOverride": true,
     "types": ["bun"]
   },
   "include": ["src/**/*", "migrations/**/*", "tests/**/*"],

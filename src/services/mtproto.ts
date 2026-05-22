@@ -69,15 +69,19 @@ export async function importChatHistory(
     if (batchMessages.length < 100) break;
   }
 
-  // Import to database
+  // Batch dedup: check which message IDs already exist
+  const existingIds = await chatHistoryRepo.checkExistsBatch(
+    chatId,
+    messages.map((m) => m.id),
+  );
+
+  // Import to database (INSERT OR REPLACE handles edits)
   let imported = 0;
   let skipped = 0;
 
   for (const msg of messages) {
     try {
-      // Check if message already exists
-      const existing = await chatHistoryRepo.getRecent(chatId, 1);
-      if (existing.some((m) => m.messageId === msg.id)) {
+      if (existingIds.has(msg.id)) {
         skipped++;
         continue;
       }
@@ -141,6 +145,60 @@ export async function getUserGroups(): Promise<Array<{ id: number; title: string
   }
 
   return groups;
+}
+
+export async function startRealtimeSync(
+  chatHistoryRepo: ChatHistoryRepository,
+): Promise<() => void> {
+  const client = getClient();
+  await client.start();
+
+  // Listen for new messages via MTProto updates
+  const handler = async (update: unknown) => {
+    const u = update as Record<string, unknown>;
+    if (u._ !== "updateNewChannelMessage" && u._ !== "updateNewMessage") return;
+
+    const msg = u.message as Record<string, unknown> | undefined;
+    if (!msg || msg._ !== "message") return;
+
+    const peerId = msg.peerId as Record<string, unknown> | undefined;
+    const chatId = (peerId?.channelId ?? peerId?.chatId ?? peerId?.userId) as number | undefined;
+    if (!chatId) return;
+
+    const msgId = msg.id as number;
+
+    // Check if already exists (fast dedup)
+    const exists = await chatHistoryRepo.checkExists(chatId, msgId);
+    if (exists) return;
+
+    const fromId = msg.fromId as Record<string, unknown> | undefined;
+    const replyTo = msg.replyTo as Record<string, unknown> | undefined;
+    const fwdFrom = msg.fwdFrom as Record<string, unknown> | undefined;
+
+    // Save new message
+    await chatHistoryRepo.save({
+      chatId,
+      messageId: msgId,
+      userId: (fromId?.userId ?? fromId?.channelId ?? 0) as number,
+      userName: fromId ? String(fromId.userId || fromId.channelId) : null,
+      role: "user",
+      content: (msg.message as string) || "[Media/Empty]",
+      replyToMessageId: (replyTo?.replyToMsgId as number) || null,
+      forwardFromName: fwdFrom ? String(fwdFrom.fromId || "Forwarded") : null,
+    });
+
+    console.log(`[MTProto] Synced message ${msgId} from chat ${chatId}`);
+  };
+
+  // mtcute uses event emitter pattern for updates
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (client as any).onUpdate?.(handler) || (client as any).updates?.on?.("raw", handler);
+
+  return () => {
+    // mtcute cleanup if available
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (client as any).updates?.off?.("raw", handler);
+  };
 }
 
 export async function isMtProtoConfigured(): Promise<boolean> {

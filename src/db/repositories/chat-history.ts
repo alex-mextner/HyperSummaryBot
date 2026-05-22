@@ -1,7 +1,7 @@
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Database } from "bun:sqlite";
-import { messages } from "../schema";
+import { messages, chats } from "../schema";
 
 export interface ChatMessage {
   id: number;
@@ -35,6 +35,15 @@ export class ChatHistoryRepository {
         content: data.content,
         replyToMessageId: data.replyToMessageId,
         forwardFromName: data.forwardFromName,
+      })
+      .onConflictDoUpdate({
+        target: [messages.chatId, messages.messageId],
+        set: {
+          content: data.content,
+          userName: data.userName,
+          replyToMessageId: data.replyToMessageId,
+          forwardFromName: data.forwardFromName,
+        },
       })
       .returning({ id: messages.id });
     return result[0]?.id ?? -1;
@@ -93,6 +102,54 @@ export class ChatHistoryRepository {
         and(eq(messages.chatId, chatId), sql`${messages.id} NOT IN (SELECT id FROM ${subquery})`),
       );
     return 0; // Drizzle doesn't return changes count, query affects rows
+  }
+
+  async checkExists(chatId: number, messageId: number): Promise<boolean> {
+    const result = await this.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.messageId, messageId)))
+      .limit(1);
+    return result.length > 0;
+  }
+
+  async checkExistsBatch(chatId: number, messageIds: number[]): Promise<Set<number>> {
+    if (messageIds.length === 0) return new Set();
+    const result = await this.db
+      .select({ messageId: messages.messageId })
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), inArray(messages.messageId, messageIds)));
+    return new Set(result.map((r) => r.messageId));
+  }
+
+  async saveChat(data: {
+    chatId: number;
+    title: string;
+    type?: string;
+    username?: string;
+  }): Promise<void> {
+    await this.db
+      .insert(chats)
+      .values({
+        chatId: data.chatId,
+        title: data.title,
+        type: data.type ?? null,
+        username: data.username ?? null,
+      })
+      .onConflictDoUpdate({
+        target: [chats.chatId],
+        set: {
+          title: data.title,
+          type: data.type ?? null,
+          username: data.username ?? null,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getChat(chatId: number): Promise<{ title: string | null; type: string | null } | null> {
+    const result = await this.db.select().from(chats).where(eq(chats.chatId, chatId)).limit(1);
+    return result[0] ? { title: result[0].title, type: result[0].type } : null;
   }
 
   async getAllChatIds(): Promise<number[]> {

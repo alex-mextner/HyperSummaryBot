@@ -224,13 +224,8 @@ bot.command("connect_account", async (ctx) => {
     for (const chatId of allChatIds.slice(0, 10)) {
       const stats = await chatHistory.getChatStats(chatId);
       if (stats.total > 0) {
-        let chatName: string;
-        try {
-          const chatInfo = await bot.api.getChat({ chat_id: chatId });
-          chatName = "title" in chatInfo ? chatInfo.title || String(chatId) : String(chatId);
-        } catch {
-          chatName = String(chatId);
-        }
+        const chatInfo = await chatHistory.getChat(chatId);
+        const chatName = chatInfo?.title || String(chatId);
         const earliest = stats.earliestDate ? stats.earliestDate.toLocaleDateString("ru-RU") : "?";
         const latest = stats.latestDate ? stats.latestDate.toLocaleDateString("ru-RU") : "?";
         const pct = Math.min((stats.total / MAX_CHAT_HISTORY) * 100, 100).toFixed(1);
@@ -447,6 +442,18 @@ bot.on("message", async (ctx) => {
           ? ctx.forwardOrigin.senderChat?.title || null
           : null,
   });
+
+  // Save/update chat title for user-facing display
+  void chatHistory
+    .saveChat({
+      chatId: chat.id,
+      title: chat.title || String(chat.id),
+      type: chat.type,
+      username: "username" in chat ? (chat.username ?? undefined) : undefined,
+    })
+    .catch((err) => {
+      console.error("Failed to save chat title:", err);
+    });
 });
 
 // Register bot commands in Telegram UI
@@ -474,6 +481,24 @@ async function main() {
   console.log(`🚀 Starting ${config.BOT_USERNAME}...`);
 
   await registerBotCommands();
+
+  // Start MTProto real-time sync if configured
+  if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
+    try {
+      const { startRealtimeSync } = await import("./services/mtproto");
+      const dispose = await startRealtimeSync(chatHistory);
+      console.log("📡 MTProto real-time sync started");
+
+      // Graceful shutdown
+      process.on("SIGINT", () => {
+        console.log("🛑 Stopping MTProto sync...");
+        dispose();
+        process.exit(0);
+      });
+    } catch (err) {
+      console.warn("⚠️ MTProto sync failed (not authenticated yet):", err);
+    }
+  }
 
   if (config.NODE_ENV === "development") {
     // Use polling for local dev
