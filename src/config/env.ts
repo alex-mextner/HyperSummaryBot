@@ -33,6 +33,10 @@ export interface EnvConfig {
   NOTION_TOKEN?: string;
   NOTION_DATABASE_ID?: string;
 
+  // MTProto (optional — for history import before bot joined)
+  MTPROTO_API_ID?: number;
+  MTPROTO_API_HASH?: string;
+
   // Admin
   BOT_ADMIN_ID?: number;
   AI_DEBUG_LOGS: boolean;
@@ -72,6 +76,11 @@ export function loadConfig(): EnvConfig {
 
     NOTION_TOKEN: process.env.NOTION_TOKEN,
     NOTION_DATABASE_ID: process.env.NOTION_DATABASE_ID,
+
+    MTPROTO_API_ID: process.env.MTPROTO_API_ID
+      ? Number.parseInt(process.env.MTPROTO_API_ID, 10)
+      : undefined,
+    MTPROTO_API_HASH: process.env.MTPROTO_API_HASH,
 
     BOT_ADMIN_ID: process.env.BOT_ADMIN_ID
       ? Number.parseInt(process.env.BOT_ADMIN_ID, 10)

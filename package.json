@@ -19,13 +19,14 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@gramio/session": "latest",
+    "@gramio/storage-sqlite": "latest",
+    "@mtcute/bun": "^0.29.7",
+    "drizzle-kit": "latest",
+    "drizzle-orm": "latest",
     "gramio": "latest",
     "openai": "latest",
-    "drizzle-orm": "latest",
-    "drizzle-kit": "latest",
-    "telegramify-markdown": "latest",
-    "@gramio/session": "latest",
-    "@gramio/storage-sqlite": "latest"
+    "telegramify-markdown": "latest"
   },
   "devDependencies": {
     "@types/bun": "latest",

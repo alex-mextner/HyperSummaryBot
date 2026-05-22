@@ -202,6 +202,59 @@ bot.command("digest", async (ctx) => {
   await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
 });
 
+bot.command("import_history", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
+    await ctx.reply("Эта команда работает только в группах.");
+    return;
+  }
+
+  const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
+
+  if (!(await isMtProtoConfigured())) {
+    await ctx.reply(
+      "⚠️ MTProto не настроен.\n\n" +
+        "Для импорта истории до добавления бота нужно:\n" +
+        "1. Получить api_id и api_hash на https://my.telegram.org\n" +
+        "2. Добавить их в .env:\n" +
+        "   MTPROTO_API_ID=12345\n" +
+        "   MTPROTO_API_HASH=your_hash\n" +
+        "3. Перезапустить бота",
+    );
+    return;
+  }
+
+  const args = ctx.text?.split(" ").slice(1) || [];
+  const limit = Math.min(Number.parseInt(args[0] || "500", 10), 5000);
+
+  await ctx.reply(`📥 Импортирую до ${limit} сообщений через MTProto... Это может занять время.`);
+
+  try {
+    const result = await importChatHistory(chatHistory, chat.id, { limit });
+    await ctx.reply(
+      `✅ Импорт завершен!\n\n` +
+        `• Импортировано: ${result.imported}\n` +
+        `• Пропущено (уже есть): ${result.skipped}`,
+    );
+  } catch (error) {
+    console.error("MTProto import error:", error);
+    await ctx.reply(
+      `❌ Ошибка импорта: ${error instanceof Error ? error.message : "Unknown error"}\n\n` +
+        "Если это первый запуск MTProto — авторизуйтесь через консоль сервера.",
+    );
+  }
+});
+
+// Handle file uploads for chat dump import
+bot.on("message", async (ctx) => {
+  if (!ctx.chat) return;
+
+  const fileName = ctx.document?.fileName?.toLowerCase() || "";
+  if (fileName.endsWith(".json") || fileName.endsWith(".csv")) {
+    await ctx.reply(`📁 Получен файл ${fileName}. Импорт в разработке.`);
+  }
+});
+
 // Store incoming messages
 bot.on("message", async (ctx) => {
   const chat = ctx.chat;
@@ -279,9 +332,29 @@ bot.on("message", async (ctx) => {
   });
 });
 
+// Register bot commands in Telegram UI
+async function registerBotCommands() {
+  await bot.api.setMyCommands({
+    commands: [
+      { command: "start", description: "👋 Start bot / show help" },
+      { command: "help", description: "📖 Show all commands and features" },
+      { command: "summary", description: "📊 Summary of recent messages [type] [count]" },
+      { command: "ask", description: "❓ Ask a question about chat history (answers in DM)" },
+      { command: "search", description: "🔍 Search messages by text" },
+      { command: "note", description: "📝 Extract useful note to Notion" },
+      { command: "config", description: "⚙️ Chat settings" },
+      { command: "digest", description: "📬 Request digest (sent to DM)" },
+      { command: "import_history", description: "📥 Import chat history via MTProto" },
+    ],
+  });
+  console.log("✅ Bot commands registered");
+}
+
 // Start bot
 async function main() {
   console.log(`🚀 Starting ${config.BOT_USERNAME}...`);
+
+  await registerBotCommands();
 
   if (config.NODE_ENV === "development") {
     // Use polling for local dev
