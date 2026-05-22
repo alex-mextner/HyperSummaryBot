@@ -287,15 +287,8 @@ async function main() {
     // Use polling for local dev
     await bot.start();
   } else {
-    // Use webhook for production
-    const webhookUrl = process.env.WEBHOOK_URL;
-    if (!webhookUrl) {
-      console.warn("WEBHOOK_URL not set, falling back to polling");
-      await bot.start();
-    } else {
-      await bot.api.setWebhook({ url: webhookUrl });
-      console.log(`✅ Webhook set: ${webhookUrl}`);
-    }
+    // Production: use polling until webhook server is configured
+    await bot.start();
   }
 }
 
