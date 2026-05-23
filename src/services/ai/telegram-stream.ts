@@ -22,9 +22,12 @@ export class TelegramStreamWriter {
   private rateLimiter: ChatRateLimiter;
   private isFinalized = false;
 
-  constructor(bot: Bot, chatId: number) {
+  private placeholderText: string;
+
+  constructor(bot: Bot, chatId: number, placeholderText = "⏳") {
     this.bot = bot;
     this.chatId = chatId;
+    this.placeholderText = placeholderText;
     this.rateLimiter = new ChatRateLimiter(1200);
     this.startTyping();
     this.initPlaceholder();
@@ -36,7 +39,7 @@ export class TelegramStreamWriter {
       if (!sendMessage) return;
       const msg = await sendMessage({
         chat_id: this.chatId,
-        text: "⏳",
+        text: this.placeholderText,
       });
       this.messageId = msg.message_id;
     } catch {

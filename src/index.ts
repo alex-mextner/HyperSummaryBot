@@ -132,8 +132,6 @@ bot.command("summary", async (ctx) => {
     return;
   }
 
-  await ctx.reply("📊 Анализирую все сообщения и генерирую подробное саммари…");
-
   try {
     const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
 
@@ -150,6 +148,7 @@ bot.command("summary", async (ctx) => {
         content: m.content,
       })),
       bot,
+      placeholderText: "📊 Анализирую все сообщения и генерирую подробное саммари…",
     });
   } catch (error) {
     console.error("Summary error:", error);

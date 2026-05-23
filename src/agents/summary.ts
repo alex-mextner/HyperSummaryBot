@@ -12,6 +12,7 @@ interface SummaryAgentOptions {
   chatId: number;
   messages: Array<{ userId: number; userName: string | null; content: string }>;
   bot: AnyBot;
+  placeholderText?: string;
 }
 
 const DRAFT_SYSTEM_PROMPT = `Ты — ассистент для анализа групповых чатов. Создай максимально подробное комбинированное саммари.
@@ -96,7 +97,7 @@ async function reviewAndRefine(draft: string, formattedMessages: string): Promis
 }
 
 export async function generateSummary(options: SummaryAgentOptions): Promise<string> {
-  const writer = new TelegramStreamWriter(options.bot, options.chatId);
+  const writer = new TelegramStreamWriter(options.bot, options.chatId, options.placeholderText);
 
   const { text: formattedMessages, lookup } = formatMessagesForPrompt(options.messages);
 
