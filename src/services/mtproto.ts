@@ -24,6 +24,22 @@ function getClient(): TelegramClient {
   return _client;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Extract FLOOD_WAIT seconds from mtcute RpcError if present. */
+function getFloodWaitSeconds(err: unknown): number | undefined {
+  if (typeof err === "object" && err !== null && "text" in err) {
+    const text = (err as any).text;
+    if (typeof text === "string" && text.startsWith("FLOOD_WAIT_")) {
+      const seconds = Number.parseInt(text.replace("FLOOD_WAIT_", ""), 10);
+      if (!Number.isNaN(seconds)) return seconds;
+    }
+  }
+  return undefined;
+}
+
 export async function importChatHistory(
   chatHistoryRepo: ChatHistoryRepository,
   chatId: number,
@@ -43,17 +59,28 @@ export async function importChatHistory(
   let offsetId = 0;
 
   while (messages.length < limit) {
-    const batch = await client.call({
-      _: "messages.getHistory",
-      peer,
-      limit: Math.min(100, limit - messages.length),
-      offsetId,
-      offsetDate: 0,
-      addOffset: 0,
-      maxId: 0,
-      minId: 0,
-      hash: 0 as any,
-    });
+    let batch: unknown;
+    try {
+      batch = await client.call({
+        _: "messages.getHistory",
+        peer,
+        limit: Math.min(100, limit - messages.length),
+        offsetId,
+        offsetDate: 0,
+        addOffset: 0,
+        maxId: 0,
+        minId: 0,
+        hash: 0 as any,
+      });
+    } catch (err) {
+      const floodWait = getFloodWaitSeconds(err);
+      if (floodWait !== undefined) {
+        console.warn(`[mtproto] FLOOD_WAIT_${floodWait} for chat ${chatId}, sleeping...`);
+        await sleep(floodWait * 1000 + 1000); // +1s buffer
+        continue; // retry same batch
+      }
+      throw err;
+    }
 
     const batchMessages = (batch as any).messages || [];
     if (batchMessages.length === 0) break;
@@ -66,6 +93,9 @@ export async function importChatHistory(
     }
 
     if (batchMessages.length < 100) break;
+
+    // Small delay between batches to avoid rate limiting
+    await sleep(500);
   }
 
   // Batch dedup: check which message IDs already exist

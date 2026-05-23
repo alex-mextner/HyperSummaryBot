@@ -52,6 +52,7 @@ async function runInitialImport(): Promise<void> {
         console.log(
           `[startup] Imported ${result.imported} messages from ${group.title} (${group.id})`,
         );
+        await new Promise((r) => setTimeout(r, 2000));
       } catch (err) {
         console.error(`[startup] Failed to import ${group.title}:`, err);
       }
@@ -373,26 +374,27 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
         );
       } else {
         await ctx.reply(
-          `📥 Найдено ${importableGroups.length} групп, где я есть. Начинаю импорт истории в фоне...`,
+          `📥 Найдено ${importableGroups.length} групп, где я есть. Начинаю импорт истории...`,
         );
 
+        // Sequential import with delay between groups to avoid FLOOD_WAIT
         for (const group of importableGroups) {
-          (async () => {
-            try {
-              const result = await importChatHistory(chatHistory, group.id, {
-                limit: MAX_CHAT_HISTORY,
-              });
-              console.log(
-                `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
-              );
-            } catch (err) {
-              console.error(`Failed to import ${group.title}:`, err);
-            }
-          })();
+          try {
+            const result = await importChatHistory(chatHistory, group.id, {
+              limit: MAX_CHAT_HISTORY,
+            });
+            console.log(
+              `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
+            );
+            // 2-second delay between groups to respect Telegram rate limits
+            await new Promise((r) => setTimeout(r, 2000));
+          } catch (err) {
+            console.error(`Failed to import ${group.title}:`, err);
+          }
         }
 
         await ctx.reply(
-          `🚀 Импорт запущен для ${importableGroups.length} групп.\n\n` +
+          `🚀 Импорт завершён для ${importableGroups.length} групп.\n\n` +
             "История будет доступна для /summary и /search.",
         );
       }
@@ -532,13 +534,24 @@ bot.on("message", async (ctx) => {
 // Auto-import history when bot is added to a group and MTProto is configured
 bot.on("my_chat_member", async (ctx) => {
   const chat = ctx.chat;
-  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) return;
-
   const oldStatus = ctx.oldChatMember?.status;
   const newStatus = ctx.newChatMember?.status;
 
-  // Bot was just added to the group
+  console.log("[my_chat_member] received", {
+    chatId: chat?.id,
+    chatType: chat?.type,
+    oldStatus,
+    newStatus,
+  });
+
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
+    console.log("[my_chat_member] skipped: not a group");
+    return;
+  }
+
+  // Bot was just added to the group (or became admin)
   if (oldStatus !== "member" && newStatus === "member") {
+    console.log("[my_chat_member] bot added to group", { chatId: chat.id });
     knownGroupIds.add(chat.id);
     const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
 
@@ -556,6 +569,7 @@ bot.on("my_chat_member", async (ctx) => {
 
   // Bot was removed from the group
   if (oldStatus === "member" && newStatus !== "member") {
+    console.log("[my_chat_member] bot removed from group", { chatId: chat.id });
     knownGroupIds.delete(chat.id);
   }
 });
