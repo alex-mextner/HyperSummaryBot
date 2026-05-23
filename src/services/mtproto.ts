@@ -377,7 +377,13 @@ export async function startRealtimeSync(
   chatHistoryRepo: ChatHistoryRepository,
 ): Promise<() => void> {
   const client = getClient();
-  await client.start();
+
+  try {
+    await client.start();
+  } catch {
+    console.warn("[mtproto] Real-time sync skipped: client not authenticated yet");
+    return () => {};
+  }
 
   // Listen for new messages via MTProto updates
   const handler = async (update: unknown) => {

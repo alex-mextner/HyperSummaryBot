@@ -568,6 +568,19 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           "История будет доступна для /summary и /search.",
       );
     }
+
+    // Start real-time sync for future messages
+    (async () => {
+      try {
+        const { startRealtimeSync } = await import("./services/mtproto");
+        const dispose = await startRealtimeSync(chatHistory);
+        if (dispose.toString() !== "() => {}") {
+          console.log("📡 MTProto real-time sync started after auth");
+        }
+      } catch (err) {
+        console.warn("⚠️ MTProto sync failed after auth:", err);
+      }
+    })();
   } catch (error) {
     pendingAuthCodes.delete(userId);
     pendingPasswords.delete(userId);
@@ -983,21 +996,20 @@ async function main() {
     }
   }
 
-  // MTProto real-time sync disabled at startup to avoid crash loop
-  // when session is incomplete. Re-enable after successful auth.
-  // if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
-  //   try {
-  //     const { startRealtimeSync } = await import("./services/mtproto");
-  //     const dispose = await startRealtimeSync(chatHistory);
-  //     console.log("📡 MTProto real-time sync started");
-  //   } catch (err) {
-  //     console.warn("⚠️ MTProto sync failed (not authenticated yet):", err);
-  //   }
-  // }
-
-  // One-time import for already-connected MTProto accounts
+  // One-time import + real-time sync for already-connected MTProto accounts
   if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
     runInitialImport();
+    (async () => {
+      try {
+        const { startRealtimeSync } = await import("./services/mtproto");
+        const dispose = await startRealtimeSync(chatHistory);
+        if (dispose.toString() !== "() => {}") {
+          console.log("📡 MTProto real-time sync started");
+        }
+      } catch (err) {
+        console.warn("⚠️ MTProto sync failed:", err);
+      }
+    })();
   }
 
   if (config.WEBHOOK_URL) {
