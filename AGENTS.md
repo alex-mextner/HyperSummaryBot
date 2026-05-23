@@ -116,6 +116,14 @@ In GramIO, **handler order matters**. First matching handler processes the messa
 
 **Never `git add -A`** without checking `git status` first.
 
+### Atomic Commits & Codex Review Policy
+
+- **One logical change = one commit.** Batching unrelated fixes into a single commit is forbidden.
+- **Codex review is mandatory** for every commit. Run `codex exec review --uncommitted` and address every P1/P2 issue before staging.
+- If codex is unavailable, document this in the commit message (`[skip-codex] reason`) and double the self-review rigor.
+- **Green tree rule:** `tsc --noEmit`, `oxlint`, and `bun test` must all pass with zero failures before the commit hash is created.
+- **Never commit on behalf of the user** without explicit permission after the review cycle.
+
 **Pre-commit hooks:** lint-staged runs oxfmt + oxlint automatically.
 
 **CI/CD:** GitHub Actions → SSH → PM2 reload on every push to main.
