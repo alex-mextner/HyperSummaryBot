@@ -141,14 +141,13 @@ bot.command("summary", async (ctx) => {
       return;
     }
 
-    const formattedMessages = messages.map((m) => ({
-      userName: m.userName,
-      content: m.content,
-    }));
-
     await generateSummary({
       chatId: targetChatId,
-      messages: formattedMessages,
+      messages: messages.map((m) => ({
+        userId: m.userId,
+        userName: m.userName,
+        content: m.content,
+      })),
       bot,
     });
   } catch (error) {

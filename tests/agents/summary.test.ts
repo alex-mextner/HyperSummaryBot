@@ -16,11 +16,14 @@ function createMockBot() {
 
 describe("generateSummary", () => {
   let capturedParams: any = null;
+  let callCount = 0;
 
   beforeEach(() => {
     capturedParams = null;
+    callCount = 0;
     const client = zaiClient();
     (client as any).chat.completions.create = async (params: any, _options: any) => {
+      callCount++;
       capturedParams = params;
       return {
         [Symbol.asyncIterator]: async function* () {
@@ -33,25 +36,26 @@ describe("generateSummary", () => {
   test("calls aiStreamRound with combined system prompt", async () => {
     const result = await generateSummary({
       chatId: 1,
-      messages: [{ userName: "Alice", content: "Hello" }],
+      messages: [{ userId: 1, userName: "Alice", content: "Hello" }],
       bot: createMockBot() as any,
     });
 
     expect(result).toBe("Mock response");
+    expect(callCount).toBe(2); // draft + review
     expect(capturedParams).not.toBeNull();
-    expect(capturedParams.messages).toHaveLength(2);
+    expect(capturedParams.messages).toHaveLength(4); // system + user + assistant draft + review prompt
     expect(capturedParams.messages[0].role).toBe("system");
-    expect(capturedParams.messages[0].content).toContain("комбинированное саммари");
+    expect(capturedParams.messages[0].content).toContain("саммари");
     expect(capturedParams.max_tokens).toBe(4096);
-    expect(capturedParams.temperature).toBe(0.3);
+    expect(capturedParams.temperature).toBe(0.2);
   });
 
-  test("includes formatted messages in user prompt", async () => {
+  test("includes formatted messages with user lookup", async () => {
     await generateSummary({
       chatId: 1,
       messages: [
-        { userName: "Alice", content: "Msg A" },
-        { userName: "Bob", content: "Msg B" },
+        { userId: 1, userName: "Alice", content: "Msg A" },
+        { userId: 2, userName: "Bob", content: "Msg B" },
       ],
       bot: createMockBot() as any,
     });
@@ -60,13 +64,15 @@ describe("generateSummary", () => {
     expect(userPrompt).toContain("Alice: Msg A");
     expect(userPrompt).toContain("Bob: Msg B");
     expect(userPrompt).toContain("---");
-    expect(userPrompt).toContain("2 шт.");
+    expect(userPrompt).toContain("УЧАСТНИКИ ЧАТА:");
+    expect(userPrompt).toContain("Alice");
+    expect(userPrompt).toContain("Bob");
   });
 
   test("returns result text", async () => {
     const result = await generateSummary({
       chatId: 1,
-      messages: [{ userName: "User", content: "Test" }],
+      messages: [{ userId: 1, userName: "User", content: "Test" }],
       bot: createMockBot() as any,
     });
 
@@ -82,7 +88,7 @@ describe("generateSummary", () => {
     await expect(
       generateSummary({
         chatId: 1,
-        messages: [{ userName: "User", content: "Test" }],
+        messages: [{ userId: 1, userName: "User", content: "Test" }],
         bot: createMockBot() as any,
       }),
     ).rejects.toThrow("AI failure");

@@ -164,21 +164,14 @@ describe("buildForwardFromNameForDb", () => {
 });
 
 describe("parseSummaryArgs", () => {
-  test("parses default values", () => {
+  test("parses empty hint", () => {
     const result = parseSummaryArgs("/summary");
-    expect(result.type).toBe("general");
-    expect(result.count).toBe(50);
+    expect(result.hint).toBe("");
   });
 
-  test("parses type and count", () => {
-    const result = parseSummaryArgs("/summary action_items 30");
-    expect(result.type).toBe("action_items");
-    expect(result.count).toBe(30);
-  });
-
-  test("caps count at 200", () => {
-    const result = parseSummaryArgs("/summary general 999");
-    expect(result.count).toBe(200);
+  test("parses hint text", () => {
+    const result = parseSummaryArgs("/summary focus on decisions");
+    expect(result.hint).toBe("focus on decisions");
   });
 });
 

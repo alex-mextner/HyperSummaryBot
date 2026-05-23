@@ -63,6 +63,11 @@ export class TelegramStreamWriter {
     this.scheduleFlush(false);
   }
 
+  replaceText(text: string): void {
+    this.fullText = text;
+    this.scheduleFlush(false);
+  }
+
   setToolLabel(name: string, input?: Record<string, unknown>): void {
     const label = this.formatToolLabel(name, input);
     this.pendingIndicators.push(label);

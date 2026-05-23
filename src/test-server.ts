@@ -78,17 +78,16 @@ async function handleTestSummary(req: Request, chatHistory: ChatHistoryRepositor
     return jsonResponse({ error: "No messages found for this chatId", chatId }, 404);
   }
 
-  const formattedMessages = messages.map((m) => ({
-    userName: m.userName,
-    content: m.content,
-  }));
-
   const startTime = Date.now();
 
   try {
     const result = await generateSummary({
       chatId,
-      messages: formattedMessages,
+      messages: messages.map((m) => ({
+        userId: m.userId,
+        userName: m.userName,
+        content: m.content,
+      })),
       bot: { api: { sendMessage: async () => ({ message_id: 1 }) } } as any,
     });
 

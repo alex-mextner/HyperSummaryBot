@@ -65,15 +65,13 @@ export function buildForwardFromNameForDb(
 }
 
 export interface SummaryArgs {
-  type: string;
-  count: number;
+  /** Any extra text after /summary (e.g. topic hint) — currently unused */
+  hint: string;
 }
 
 export function parseSummaryArgs(text: string): SummaryArgs {
-  const args = text.split(" ").slice(1);
-  const type = args[0] || "general";
-  const count = Math.min(Number.parseInt(args[1] || "50", 10), 200);
-  return { type, count };
+  const hint = text.split(" ").slice(1).join(" ").trim();
+  return { hint };
 }
 
 export function parseSearchQuery(text: string): string {
