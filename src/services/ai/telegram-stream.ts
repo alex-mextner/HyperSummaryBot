@@ -31,7 +31,9 @@ export class TelegramStreamWriter {
 
   private async initPlaceholder() {
     try {
-      const msg = await this.bot.api.sendMessage({
+      const sendMessage = this.bot.api?.sendMessage;
+      if (!sendMessage) return;
+      const msg = await sendMessage({
         chat_id: this.chatId,
         text: "⏳",
       });
@@ -42,8 +44,10 @@ export class TelegramStreamWriter {
   }
 
   private startTyping() {
+    const sendChatAction = this.bot.api?.sendChatAction;
+    if (!sendChatAction) return;
     this.typingInterval = setInterval(() => {
-      this.bot.api.sendChatAction({ chat_id: this.chatId, action: "typing" }).catch(() => {});
+      sendChatAction({ chat_id: this.chatId, action: "typing" }).catch(() => {});
     }, 4000);
   }
 
@@ -93,20 +97,26 @@ export class TelegramStreamWriter {
     const text = this.buildPlainText(final);
     if (!text) return;
 
+    const editMessageText = this.bot.api?.editMessageText;
+    const sendMessage = this.bot.api?.sendMessage;
+    if (!editMessageText && !sendMessage) {
+      console.warn("[stream] No Telegram API methods available");
+      return;
+    }
+
     // Rate limit: min 1.2s between edits to same chat
     await this.rateLimiter.wait(this.chatId);
 
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        if (this.messageId) {
-          await this.bot.api.editMessageText({
+        if (this.messageId && editMessageText) {
+          await editMessageText({
             chat_id: this.chatId,
             message_id: this.messageId,
             text,
-            // No parse_mode during streaming — plain text avoids HTML parse errors
           });
-        } else {
-          const msg = await this.bot.api.sendMessage({
+        } else if (sendMessage) {
+          const msg = await sendMessage({
             chat_id: this.chatId,
             text,
           });
@@ -118,7 +128,6 @@ export class TelegramStreamWriter {
           await sleep(getRetryDelay(attempt));
           continue;
         }
-        // "Message not modified" and other non-fatal errors — swallow
         if (
           error instanceof Error &&
           (error.message.includes("message is not modified") ||
@@ -135,7 +144,6 @@ export class TelegramStreamWriter {
   private buildPlainText(final: boolean): string {
     let processed = this.processThinkTags(this.fullText.trim());
 
-    // Trim to safe length during streaming (leave buffer for final HTML formatting)
     const limit = final ? TG_MSG_LIMIT : TG_MSG_LIMIT - 200;
     if (processed.length > limit) {
       processed = processed.slice(0, limit) + (final ? "" : " …");
@@ -153,7 +161,6 @@ export class TelegramStreamWriter {
   }
 
   private processThinkTags(text: string): string {
-    // Remove <think>…</think> sections (model reasoning tags)
     return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   }
 
@@ -162,11 +169,7 @@ export class TelegramStreamWriter {
     this.isFinalized = true;
 
     this.stopTyping();
-
-    // One last plain-text flush to show the complete content
     await this.flush(true);
-
-    // Now format as HTML and send proper final messages
     await this.sendFinalHtmlChunks();
   }
 
@@ -174,14 +177,15 @@ export class TelegramStreamWriter {
     const plainText = this.buildPlainText(true);
     if (!plainText || plainText === "⏳") return;
 
-    // Convert to HTML
     const html = markdownToHtml(plainText);
     const chunks = splitHtmlText(html, TG_MSG_LIMIT);
 
-    // Delete the streamed placeholder
-    if (this.messageId) {
+    const deleteMessage = this.bot.api?.deleteMessage;
+    const sendMessage = this.bot.api?.sendMessage;
+
+    if (this.messageId && deleteMessage) {
       try {
-        await this.bot.api.deleteMessage({
+        await deleteMessage({
           chat_id: this.chatId,
           message_id: this.messageId,
         });
@@ -191,12 +195,16 @@ export class TelegramStreamWriter {
       this.messageId = null;
     }
 
-    // Send formatted HTML chunks as new messages
+    if (!sendMessage) {
+      console.warn("[stream] sendMessage not available, skipping final chunks");
+      return;
+    }
+
     for (const chunk of chunks) {
       await this.rateLimiter.wait(this.chatId);
       for (let attempt = 0; attempt < 5; attempt++) {
         try {
-          await this.bot.api.sendMessage({
+          await sendMessage({
             chat_id: this.chatId,
             text: chunk,
             parse_mode: "HTML",
@@ -207,9 +215,8 @@ export class TelegramStreamWriter {
             await sleep(getRetryDelay(attempt));
             continue;
           }
-          // If HTML parse fails, fall back to plain text
           if (error instanceof Error && error.message.includes("parse")) {
-            await this.bot.api.sendMessage({
+            await sendMessage({
               chat_id: this.chatId,
               text: chunk,
             });
@@ -225,8 +232,10 @@ export class TelegramStreamWriter {
   async deleteMessage(): Promise<void> {
     this.stopTyping();
     if (!this.messageId) return;
+    const deleteMessage = this.bot.api?.deleteMessage;
+    if (!deleteMessage) return;
     try {
-      await this.bot.api.deleteMessage({
+      await deleteMessage({
         chat_id: this.chatId,
         message_id: this.messageId,
       });
