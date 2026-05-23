@@ -23,14 +23,43 @@ const chatHistory = new ChatHistoryRepository(db);
 
 // Track chats where the bot is actually present — used to filter MTProto import
 const knownGroupIds = new Set<number>();
-// Pre-populate from existing database records
-chatHistory
-  .getAllChatIds()
-  .then((ids) => {
+
+async function loadKnownGroupIds(): Promise<void> {
+  try {
+    const ids = await chatHistory.getAllChatIds();
     for (const id of ids) knownGroupIds.add(id);
     console.log(`📋 Pre-loaded ${knownGroupIds.size} known chats from DB`);
-  })
-  .catch(() => {});
+  } catch {
+    console.warn("📋 Failed to pre-load known chats from DB");
+  }
+}
+
+/** One-time import on startup for already-connected MTProto accounts */
+async function runInitialImport(): Promise<void> {
+  try {
+    const { getUserGroups, importChatHistory } = await import("./services/mtproto");
+    const groups = await getUserGroups();
+    const importableGroups = groups.filter((g) => knownGroupIds.has(g.id));
+    console.log(
+      `[startup] ${groups.length} user groups total, ${importableGroups.length} importable (bot is present)`,
+    );
+
+    for (const group of importableGroups) {
+      try {
+        const result = await importChatHistory(chatHistory, group.id, {
+          limit: MAX_CHAT_HISTORY,
+        });
+        console.log(
+          `[startup] Imported ${result.imported} messages from ${group.title} (${group.id})`,
+        );
+      } catch (err) {
+        console.error(`[startup] Failed to import ${group.title}:`, err);
+      }
+    }
+  } catch (err) {
+    console.warn("[startup] Initial import skipped (not authenticated yet):", err);
+  }
+}
 
 // Create bot with derive for typed context
 const bot = new Bot(config.BOT_TOKEN)
@@ -635,6 +664,8 @@ async function registerBotCommands() {
 async function main() {
   console.log(`🚀 Starting ${config.BOT_USERNAME}...`);
 
+  // Load known groups from DB before any imports run
+  await loadKnownGroupIds();
   await registerBotCommands();
 
   // MTProto real-time sync disabled at startup to avoid crash loop
@@ -648,6 +679,11 @@ async function main() {
   //     console.warn("⚠️ MTProto sync failed (not authenticated yet):", err);
   //   }
   // }
+
+  // One-time import for already-connected MTProto accounts
+  if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
+    runInitialImport();
+  }
 
   if (config.NODE_ENV === "development") {
     // Use polling for local dev
