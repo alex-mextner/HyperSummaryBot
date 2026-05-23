@@ -1,3 +1,5 @@
 104.248.84.190 {
-    reverse_proxy /webhook localhost:3002
+	handle /webhook* {
+		reverse_proxy localhost:3002
+	}
 }
