@@ -453,23 +453,17 @@ async function main() {
 
   await registerBotCommands();
 
-  // Start MTProto real-time sync if configured
-  if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
-    try {
-      const { startRealtimeSync } = await import("./services/mtproto");
-      const dispose = await startRealtimeSync(chatHistory);
-      console.log("📡 MTProto real-time sync started");
-
-      // Graceful shutdown
-      process.on("SIGINT", () => {
-        console.log("🛑 Stopping MTProto sync...");
-        dispose();
-        process.exit(0);
-      });
-    } catch (err) {
-      console.warn("⚠️ MTProto sync failed (not authenticated yet):", err);
-    }
-  }
+  // MTProto real-time sync disabled at startup to avoid crash loop
+  // when session is incomplete. Re-enable after successful auth.
+  // if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
+  //   try {
+  //     const { startRealtimeSync } = await import("./services/mtproto");
+  //     const dispose = await startRealtimeSync(chatHistory);
+  //     console.log("📡 MTProto real-time sync started");
+  //   } catch (err) {
+  //     console.warn("⚠️ MTProto sync failed (not authenticated yet):", err);
+  //   }
+  // }
 
   if (config.NODE_ENV === "development") {
     // Use polling for local dev
