@@ -43,25 +43,22 @@ function getFloodWaitSeconds(err: unknown): number | undefined {
 /** Check if the bot has access to a chat by trying to fetch 1 message.
  * Returns true if the bot is a member (or admin), false otherwise.
  */
-/** Resolve a chat peer using getEntity (API-aware, unlike resolvePeer which uses local cache). */
-async function resolveChatPeer(client: any, chatId: number): Promise<any> {
-  const entity = await client.getEntity(chatId);
-  if (!entity) throw new Error(`Entity ${chatId} not found`);
-
-  if (entity._ === "chat" || entity._ === "chatForbidden") {
-    return { _: "inputPeerChat", chat_id: entity.id };
+function buildPeer(chatId: number, type: "group" | "channel", accessHash?: string | number): any {
+  if (type === "group") {
+    return { _: "inputPeerChat", chat_id: chatId };
   }
-  if (entity._ === "channel" || entity._ === "channelForbidden") {
-    return { _: "inputPeerChannel", channel_id: entity.id, access_hash: entity.accessHash ?? 0 };
-  }
-  throw new Error(`Unsupported entity type: ${entity._}`);
+  return { _: "inputPeerChannel", channel_id: chatId, access_hash: accessHash ?? 0 };
 }
 
-export async function canAccessChat(chatId: number): Promise<boolean> {
+export async function canAccessChat(
+  chatId: number,
+  type: "group" | "channel",
+  accessHash?: string | number,
+): Promise<boolean> {
   try {
     const client = getClient();
     await client.start();
-    const peer = await resolveChatPeer(client, chatId);
+    const peer = buildPeer(chatId, type, accessHash);
     await client.call({
       _: "messages.getHistory",
       peer,
@@ -96,15 +93,20 @@ export async function canAccessChat(chatId: number): Promise<boolean> {
 export async function importChatHistory(
   chatHistoryRepo: ChatHistoryRepository,
   chatId: number,
-  options: { limit?: number; offsetDate?: Date } = {},
+  options: {
+    limit?: number;
+    offsetDate?: Date;
+    type?: "group" | "channel";
+    accessHash?: string | number;
+  } = {},
 ): Promise<{ imported: number; skipped: number }> {
   const client = getClient();
 
   // Start client (uses saved session if available)
   await client.start();
 
-  // Resolve peer from chat ID via getEntity (works without local cache)
-  const peer = await resolveChatPeer(client, chatId);
+  // Build peer directly from known type/access_hash (avoids resolvePeer cache issues)
+  const peer = buildPeer(chatId, options.type ?? "group", options.accessHash);
 
   // Fetch messages
   const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
@@ -188,7 +190,7 @@ export async function importChatHistory(
 }
 
 export async function getUserGroups(): Promise<
-  Array<{ id: number; title: string; type: "group" | "channel" }>
+  Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: string | number }>
 > {
   const client = getClient();
   await client.start();
@@ -204,17 +206,29 @@ export async function getUserGroups(): Promise<
 
   const dialogs = (result as any).dialogs || [];
   const chats = (result as any).chats || [];
-  const chatMap = new Map<number, { title: string; type: "group" | "channel" }>();
+  const chatMap = new Map<
+    number,
+    { title: string; type: "group" | "channel"; accessHash?: string | number }
+  >();
 
   for (const chat of chats) {
     if (chat._ === "chat") {
       chatMap.set(chat.id, { title: chat.title || "Unknown", type: "group" });
     } else if (chat._ === "channel") {
-      chatMap.set(chat.id, { title: chat.title || "Unknown", type: "channel" });
+      chatMap.set(chat.id, {
+        title: chat.title || "Unknown",
+        type: "channel",
+        accessHash: chat.access_hash,
+      });
     }
   }
 
-  const groups: Array<{ id: number; title: string; type: "group" | "channel" }> = [];
+  const groups: Array<{
+    id: number;
+    title: string;
+    type: "group" | "channel";
+    accessHash?: string | number;
+  }> = [];
   for (const dialog of dialogs) {
     const peer = dialog.peer;
     let chatId: number | null = null;
@@ -228,7 +242,12 @@ export async function getUserGroups(): Promise<
     if (chatId) {
       const info = chatMap.get(chatId);
       if (info) {
-        groups.push({ id: chatId, title: info.title, type: info.type });
+        groups.push({
+          id: chatId,
+          title: info.title,
+          type: info.type,
+          accessHash: info.accessHash,
+        });
       }
     }
   }

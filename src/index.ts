@@ -54,20 +54,18 @@ async function runInitialImport(): Promise<void> {
     const { getUserGroups, canAccessChat, importChatHistory } = await import("./services/mtproto");
     const groups = await getUserGroups();
 
-    // If we don't know which groups have the bot, discover them via MTProto
-    if (knownGroupIds.size === 0) {
-      console.log(
-        `[startup] No known groups in DB — probing ${groups.length} user groups for bot membership...`,
-      );
-      for (const group of groups) {
-        const hasAccess = await canAccessChat(group.id);
-        console.log(`[startup] canAccessChat(${group.title}): ${hasAccess}`);
-        if (hasAccess) {
-          knownGroupIds.add(group.id);
-        }
+    // Discover which groups the bot can actually access
+    console.log(
+      `[startup] No known groups in DB — probing ${groups.length} user groups for bot membership...`,
+    );
+    for (const group of groups) {
+      const hasAccess = await canAccessChat(group.id, group.type, group.accessHash);
+      console.log(`[startup] canAccessChat(${group.title}): ${hasAccess}`);
+      if (hasAccess) {
+        knownGroupIds.add(group.id);
       }
-      console.log(`[startup] Discovered ${knownGroupIds.size} groups with bot`);
     }
+    console.log(`[startup] Discovered ${knownGroupIds.size} groups with bot`);
 
     const importableGroups = groups.filter((g) => isGroupKnown(g.id, g.type));
     console.log(
@@ -78,6 +76,8 @@ async function runInitialImport(): Promise<void> {
       try {
         const result = await importChatHistory(chatHistory, group.id, {
           limit: MAX_CHAT_HISTORY,
+          type: group.type,
+          accessHash: group.accessHash,
         });
         console.log(
           `[startup] Imported ${result.imported} messages from ${group.title} (${group.id})`,
@@ -392,7 +392,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
       // Probe each group: is the bot a member?
       const importableGroups: typeof groups = [];
       for (const group of groups) {
-        const hasAccess = await canAccessChat(group.id);
+        const hasAccess = await canAccessChat(group.id, group.type, group.accessHash);
         console.log(`[connect_account] canAccessChat(${group.title}): ${hasAccess}`);
         if (hasAccess) {
           importableGroups.push(group);
@@ -424,6 +424,8 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           try {
             const result = await importChatHistory(chatHistory, group.id, {
               limit: MAX_CHAT_HISTORY,
+              type: group.type,
+              accessHash: group.accessHash,
             });
             importedCount += result.imported;
             console.log(
@@ -602,7 +604,10 @@ bot.on("my_chat_member", async (ctx) => {
       // Silent import in background
       (async () => {
         try {
-          await importChatHistory(chatHistory, chat.id, { limit: MAX_CHAT_HISTORY });
+          await importChatHistory(chatHistory, chat.id, {
+            limit: MAX_CHAT_HISTORY,
+            type: chat.type === "supergroup" ? "channel" : "group",
+          });
         } catch (error) {
           console.error("Auto MTProto import error:", error);
         }
