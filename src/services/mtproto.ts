@@ -77,7 +77,7 @@ export async function importChatHistory(
     limit?: number;
     offsetDate?: Date;
     type?: "group" | "channel";
-    accessHash?: bigint;
+    accessHash?: unknown;
   } = {},
 ): Promise<{ imported: number; skipped: number }> {
   const client = getClient();
@@ -88,7 +88,7 @@ export async function importChatHistory(
   // Build peer directly from known type + access_hash (avoids resolvePeer cache issues).
   // Fallback to resolvePeer if accessHash not provided (e.g. my_chat_member events).
   let peer;
-  if (options.type === "channel" && options.accessHash && options.accessHash !== BigInt(0)) {
+  if (options.type === "channel" && options.accessHash) {
     // mtcute runtime accepts bigint for Long fields; cast to suppress TS strictness
     peer = {
       _: "inputPeerChannel" as const,
@@ -245,7 +245,7 @@ export async function getUserGroups(): Promise<
  */
 export async function getCommonGroups(
   botUsername: string,
-): Promise<Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: bigint }>> {
+): Promise<Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: unknown }>> {
   const client = getClient();
   await client.start();
 
@@ -296,7 +296,8 @@ export async function getCommonGroups(
         id: chat.id,
         title: chat.title || "Unknown",
         type: "channel",
-        accessHash: typeof ah === "bigint" ? ah : ah !== undefined ? BigInt(ah) : undefined,
+        // mtcute returns Long objects; pass through as-is (runtime handles them)
+        accessHash: ah,
       });
     }
   }
