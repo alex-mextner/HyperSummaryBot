@@ -1,3 +1,4 @@
+import type OpenAI from "openai";
 import { aiStreamRound } from "../services/ai/streaming";
 import { TelegramStreamWriter } from "../services/ai/telegram-stream";
 import {
@@ -5,6 +6,7 @@ import {
   containsRawUserIds,
   sanitizeAttributions,
 } from "../utils/message-formatter";
+import { renderTable } from "../utils/table-renderer";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyBot = any;
 
@@ -37,11 +39,41 @@ const DRAFT_SYSTEM_PROMPT = `Ты — ассистент для анализа �
 - Цитата: <blockquote>текст</blockquote>
 - Код: <code>текст</code>
 - Спойлер: <span class="tg-spoiler">текст</span>
-- Таблицы: используй markdown-таблицу (| колонка |) для action items, решений, сравнений — она будет отрендерена как стилизованная таблица
-- НЕ используй markdown кроме таблиц
+- НЕ используй markdown (##, **, __, | таблицы)
 - НЕ придумывай фактов — только из сообщений
 - Если нет информации — напиши "Не обсуждалось"
 - Язык: русский`;
+
+const SUMMARY_TOOLS: OpenAI.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "render_table",
+      description:
+        "Render a structured table (action items, decisions, comparisons) as HTML. Use this INSTEAD of writing markdown tables in the text.",
+      parameters: {
+        type: "object",
+        properties: {
+          headers: {
+            type: "array",
+            items: { type: "string" },
+            description: "Column headers",
+          },
+          rows: {
+            type: "array",
+            items: { type: "array", items: { type: "string" } },
+            description: "Table rows, each is an array of cell strings",
+          },
+          title: {
+            type: "string",
+            description: "Optional table title/caption",
+          },
+        },
+        required: ["headers", "rows"],
+      },
+    },
+  },
+];
 
 const REVIEW_SYSTEM_PROMPT = `Ты — редактор саммари. Проверь черновик и выдай финальную версию.
 
@@ -52,14 +84,18 @@ const REVIEW_SYSTEM_PROMPT = `Ты — редактор саммари. Пров
    Отрази обе точки зрения или уточни, что решение не принято.
 3. Все ли факты подтверждены цитатами? Убери додуманное.
 4. Каждый факт приписан конкретному человеку по имени?
-5. Нет ли markdown (#, **, __)? Замени на HTML теги. Markdown-таблицы разрешены для структурированных данных.
+5. Нет ли markdown (#, **, __, | таблицы)? Замени на HTML теги. Для структурированных данных используй инструмент render_table.
 
 Выдай ТОЛЬКО финальный текст. Не пиши "Исправлено:" или комментарии.`;
 
 async function generateDraft(
   formattedMessages: string,
-  callbacks: { onTextDelta?: (text: string) => void },
-): Promise<string> {
+  callbacks: {
+    onTextDelta?: (text: string) => void;
+    onToolCallStart?: (name: string, input: Record<string, unknown>) => void;
+    onToolCallResult?: (name: string, result: unknown) => void;
+  },
+): Promise<{ text: string; toolCalls: Array<{ name: string; arguments: string; id: string }> }> {
   const result = await aiStreamRound(
     {
       messages: [
@@ -69,15 +105,19 @@ async function generateDraft(
           content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
         },
       ],
+      tools: SUMMARY_TOOLS,
       maxTokens: 4096,
       temperature: 0.3,
     },
     callbacks,
   );
-  return result.text;
+  return { text: result.text, toolCalls: result.toolCalls };
 }
 
-async function reviewAndRefine(draft: string, formattedMessages: string): Promise<string> {
+async function reviewAndRefine(
+  draft: string,
+  formattedMessages: string,
+): Promise<{ text: string; toolCalls: Array<{ name: string; arguments: string; id: string }> }> {
   const result = await aiStreamRound(
     {
       messages: [
@@ -89,12 +129,13 @@ async function reviewAndRefine(draft: string, formattedMessages: string): Promis
         { role: "assistant", content: draft },
         { role: "user", content: REVIEW_SYSTEM_PROMPT },
       ],
+      tools: SUMMARY_TOOLS,
       maxTokens: 4096,
       temperature: 0.2,
     },
     {},
   );
-  return result.text;
+  return { text: result.text, toolCalls: result.toolCalls };
 }
 
 export async function generateSummary(options: SummaryAgentOptions): Promise<string> {
@@ -114,36 +155,40 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
   try {
     // Phase 1: Draft with streaming (user sees live text)
     const draftStart = Date.now();
-    const draft = await generateDraft(formattedMessages, {
+    const draftResult = await generateDraft(formattedMessages, {
       onTextDelta: (text) => writer.appendText(text),
     });
     console.log(
-      `[summary] Draft phase complete — ${draft.length} chars, ${Date.now() - draftStart}ms`,
+      `[summary] Draft phase complete — ${draftResult.text.length} chars, ${Date.now() - draftStart}ms`,
     );
 
     // Phase 2: Review and refine (silent) — capped at 60s to avoid hanging on slow providers
     writer.appendText("\n\n[проверка фактов…]");
     const reviewStart = Date.now();
-    let final: string;
+    let reviewResult = {
+      text: draftResult.text,
+      toolCalls: [] as Array<{ name: string; arguments: string; id: string }>,
+    };
     try {
-      const reviewPromise = reviewAndRefine(draft, formattedMessages);
+      const reviewPromise = reviewAndRefine(draftResult.text, formattedMessages);
       const timeoutPromise = new Promise<never>((_, reject) => {
         const id = setTimeout(() => {
           clearTimeout(id);
           reject(new Error("Review phase timed out after 60s"));
         }, 60_000);
       });
-      final = await Promise.race([reviewPromise, timeoutPromise]);
+      reviewResult = await Promise.race([reviewPromise, timeoutPromise]);
       console.log(
-        `[summary] Review phase complete — ${final.length} chars, ${Date.now() - reviewStart}ms`,
+        `[summary] Review phase complete — ${reviewResult.text.length} chars, ${Date.now() - reviewStart}ms`,
       );
     } catch (reviewError) {
       console.warn(
         `[summary] Review phase failed after ${Date.now() - reviewStart}ms, falling back to draft:`,
         reviewError,
       );
-      final = draft;
+      reviewResult = draftResult;
     }
+    let final = reviewResult.text;
 
     // Post-process: clean up attributions
     final = sanitizeAttributions(final, lookup);
@@ -155,6 +200,42 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
       for (const [userId, name] of lookup.names) {
         final = final.replace(new RegExp(`\\b${userId}\\b`, "g"), name);
       }
+    }
+
+    // Render tool calls (structured tables) and append
+    const allToolCalls = [...draftResult.toolCalls, ...reviewResult.toolCalls];
+    const tableHtmlParts: string[] = [];
+    for (const tc of allToolCalls) {
+      if (tc.name === "render_table") {
+        try {
+          const args = JSON.parse(tc.arguments) as {
+            headers: string[];
+            rows: string[][];
+            title?: string;
+          };
+          const tableRows = args.rows.map((cells) => {
+            const row: Record<string, string> = {};
+            for (let i = 0; i < args.headers.length; i++) {
+              const header = args.headers[i];
+              if (header !== undefined) {
+                row[header] = cells[i] ?? "";
+              }
+            }
+            return row;
+          });
+          const tableHtml = renderTable(args.headers, tableRows);
+          if (args.title) {
+            tableHtmlParts.push(`<b>${args.title}</b>\n${tableHtml}`);
+          } else {
+            tableHtmlParts.push(tableHtml);
+          }
+        } catch (e) {
+          console.error("[summary] Failed to render tool table:", e);
+        }
+      }
+    }
+    if (tableHtmlParts.length > 0) {
+      final += "\n\n" + tableHtmlParts.join("\n\n");
     }
 
     // Replace streamed draft with refined final version
