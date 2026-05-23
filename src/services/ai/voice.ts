@@ -1,5 +1,4 @@
 import { groqClient } from "./clients";
-import type { OpenAI } from "openai";
 
 export interface TranscriptionResult {
   text: string;

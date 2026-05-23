@@ -61,7 +61,7 @@ export class TelegramStreamWriter {
     this.scheduleFlush(false);
   }
 
-  private formatToolLabel(name: string, input?: Record<string, unknown>): string {
+  private formatToolLabel(name: string, _input?: Record<string, unknown>): string {
     const labels: Record<string, string> = {
       get_summary: "Генерирую саммари",
       extract_notes: "Извлекаю заметки",
@@ -104,7 +104,7 @@ export class TelegramStreamWriter {
     }
   }
 
-  private buildText(final: boolean): string {
+  private buildText(_final: boolean): string {
     const processed = this.processThinkTags(this.fullText.trim());
     if (!processed && this.toolLines.length === 0) return "⏳...";
 

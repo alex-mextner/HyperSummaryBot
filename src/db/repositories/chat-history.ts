@@ -78,8 +78,8 @@ export class ChatHistoryRepository {
       .where(
         and(
           eq(messages.chatId, chatId),
-          sql`${messages.createdAt} >= ${startTime}`,
-          sql`${messages.createdAt} <= ${endTime}`,
+          sql`${messages.createdAt} >= ${Math.floor(startTime.getTime() / 1000)}`,
+          sql`${messages.createdAt} <= ${Math.floor(endTime.getTime() / 1000)}`,
         ),
       )
       .orderBy(desc(messages.createdAt))

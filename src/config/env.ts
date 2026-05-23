@@ -1,5 +1,3 @@
-import type { OpenAI } from "openai";
-
 export interface EnvConfig {
   BOT_TOKEN: string;
   BOT_USERNAME: string;
@@ -42,7 +40,7 @@ export interface EnvConfig {
   AI_DEBUG_LOGS: boolean;
 }
 
-function requireEnv(name: string): string {
+export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} environment variable is required`);
   return value;

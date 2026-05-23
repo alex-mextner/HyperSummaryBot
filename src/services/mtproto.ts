@@ -192,7 +192,12 @@ export async function startRealtimeSync(
 
   // mtcute uses event emitter pattern for updates
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (client as any).onUpdate?.(handler) || (client as any).updates?.on?.("raw", handler);
+  const c = client as any;
+  if (c.onUpdate) {
+    c.onUpdate(handler);
+  } else if (c.updates?.on) {
+    c.updates.on("raw", handler);
+  }
 
   return () => {
     // mtcute cleanup if available
