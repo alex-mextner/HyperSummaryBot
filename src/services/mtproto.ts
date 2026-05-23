@@ -215,10 +215,14 @@ export async function getUserGroups(): Promise<
     if (chat._ === "chat") {
       chatMap.set(chat.id, { title: chat.title || "Unknown", type: "group" });
     } else if (chat._ === "channel") {
+      const rawAccessHash = chat.accessHash ?? chat.access_hash;
+      console.log(
+        `[mtproto] getUserGroups chat ${chat.id} (${chat.title}) access_hash type=${typeof rawAccessHash} value=${rawAccessHash}`,
+      );
       chatMap.set(chat.id, {
         title: chat.title || "Unknown",
         type: "channel",
-        accessHash: chat.access_hash,
+        accessHash: rawAccessHash,
       });
     }
   }
