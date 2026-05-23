@@ -172,7 +172,8 @@ All user-facing bot messages must follow these rules:
 ## Server Infrastructure
 - **Reverse proxy: Caddy** (not nginx). Caddy runs as systemd service, config: `/etc/caddy/Caddyfile`.
 - Caddy imports project configs via `import /var/www/*/Caddyfile`. Each project needs its own `Caddyfile` in `/var/www/<project>/` for reverse-proxy rules.
-- **Webhook mode** requires a Caddyfile that reverse-proxies `https://104.248.84.190/webhook` → `localhost:3002`. Without it, the bot must run in **polling mode** (`WEBHOOK_URL` unset).
+- **Webhook mode** requires a domain with valid SSL (Let's Encrypt). Bare IP won't work. Current deployment uses `https://log-viewer.invntrm.ru/webhook` (proxies to `localhost:3002`).
+- **Caddy reload** works as `www-data` user: `caddy reload --config /etc/caddy/Caddyfile`.
 - **PM2 resilience**: `autorestart: true`, `max_restarts: 10`, `min_uptime: 10s`, `max_memory_restart: 512M`. Process-level `uncaughtException` / `unhandledRejection` handlers prevent crashes.
 
 ## Error Handling (Updated)

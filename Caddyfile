@@ -1,5 +1,0 @@
-104.248.84.190 {
-	handle /webhook* {
-		reverse_proxy localhost:3002
-	}
-}
