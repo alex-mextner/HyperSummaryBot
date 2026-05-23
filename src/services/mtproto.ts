@@ -166,34 +166,52 @@ export async function importChatHistory(
     messages.map((m) => Number(m.id)),
   );
 
-  // Build user ID → name lookup from message senders
-  const senderIds = new Set<number>();
+  // Build user ID → { accessHash, name } from message senders
+  const senderMap = new Map<number, { accessHash: bigint | undefined; tempName: string }>();
   for (const msg of messages) {
     const uid = msg.fromId?.userId ? Number(msg.fromId.userId) : null;
-    if (uid && uid > 0) senderIds.add(uid);
+    if (!uid || uid <= 0) continue;
+    if (senderMap.has(uid)) continue;
+
+    const ah = msg.fromId?.accessHash ?? msg.fromId?.access_hash;
+    console.log(
+      `[mtproto] fromId debug: uid=${uid}, accessHash=${ah}, typeof=${typeof ah}, keys=${Object.keys(msg.fromId || {}).join(",")}`,
+    );
+    const tempName = msg.fromId ? String(msg.fromId.userId || msg.fromId.channelId) : "Unknown";
+    senderMap.set(uid, {
+      accessHash: typeof ah === "bigint" ? ah : ah !== undefined ? BigInt(ah) : undefined,
+      tempName,
+    });
   }
 
   const userNameMap = new Map<number, string>();
-  if (senderIds.size > 0) {
+  if (senderMap.size > 0) {
     try {
-      const usersResult = await client.call({
-        _: "users.getUsers",
-        id: Array.from(senderIds).map(
-          (id) => ({ _: "inputUser" as const, userId: id, accessHash: BigInt(0) }) as any,
-        ),
-      });
-      const users = (usersResult as any).users || [];
-      for (const u of users) {
-        if (u._ === "user") {
-          const name = u.username
-            ? `@${u.username}`
-            : u.firstName
-              ? `${u.firstName}${u.lastName ? ` ${u.lastName}` : ""}`
-              : String(u.id);
-          userNameMap.set(Number(u.id), name);
+      const inputUsers: any[] = [];
+      for (const [uid, info] of senderMap) {
+        if (info.accessHash && info.accessHash !== BigInt(0)) {
+          inputUsers.push({ _: "inputUser", userId: uid, accessHash: info.accessHash });
         }
       }
-      console.log(`[mtproto] Resolved ${userNameMap.size}/${senderIds.size} user names`);
+
+      if (inputUsers.length > 0) {
+        const usersResult = await client.call({
+          _: "users.getUsers",
+          id: inputUsers,
+        });
+        const users = (usersResult as any).users || [];
+        for (const u of users) {
+          if (u._ === "user") {
+            const name = u.username
+              ? `@${u.username}`
+              : u.firstName
+                ? `${u.firstName}${u.lastName ? ` ${u.lastName}` : ""}`
+                : String(u.id);
+            userNameMap.set(Number(u.id), name);
+          }
+        }
+      }
+      console.log(`[mtproto] Resolved ${userNameMap.size}/${senderMap.size} user names`);
     } catch (e) {
       console.warn("[mtproto] Failed to resolve user names:", e);
     }
