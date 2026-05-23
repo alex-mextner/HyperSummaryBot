@@ -206,13 +206,21 @@ const pendingAuthCodes = new Map<
 
 // MTProto account connection (DM only)
 bot.command("connect_account", async (ctx) => {
+  console.log("[connect_account] command handler triggered", {
+    userId: ctx.from?.id,
+    chatId: ctx.chat?.id,
+    chatType: ctx.chat?.type,
+  });
   try {
     const { isMtProtoConfigured } = await import("./services/mtproto");
+    const mtprotoOk = await isMtProtoConfigured();
+    console.log("[connect_account] isMtProtoConfigured:", mtprotoOk);
     await handleConnectAccount(ctx, chatHistory, {
-      mtprotoConfigured: await isMtProtoConfigured(),
+      mtprotoConfigured: mtprotoOk,
     });
+    console.log("[connect_account] handleConnectAccount completed");
   } catch (error) {
-    console.error("Connect account command error:", error);
+    console.error("[connect_account] command handler ERROR:", error);
     await ctx.reply("❌ Ошибка при обработке команды. Попробуйте позже.");
   }
 });
@@ -238,21 +246,26 @@ bot.on("message", async (ctx) => {
   // Handle phone number input for MTProto auth
   if (/^\+\d{10,15}$/.test(text.trim())) {
     const phone = text.trim();
+    console.log("[connect_account] phone number received", { userId, phone });
 
     await ctx.reply(`📱 Номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...");
 
     try {
+      console.log("[connect_account] importing TelegramClient...");
       const { TelegramClient } = await import("@mtcute/bun");
+      console.log("[connect_account] TelegramClient imported, creating client...");
       const client = new TelegramClient({
         apiId: config.MTPROTO_API_ID!,
         apiHash: config.MTPROTO_API_HASH!,
         storage: "data/mtcute-session",
       });
+      console.log("[connect_account] client created, calling start...");
 
       // Start auth and wait for code
       await client.start({
         phone,
         code: async () => {
+          console.log("[connect_account] prompting for auth code");
           await ctx.reply(
             "🔑 <b>Код отправлен в Telegram</b>\n\n" +
               "Введите код из сообщения от Telegram (без дефисов):",
@@ -265,11 +278,14 @@ bot.on("message", async (ctx) => {
         },
       });
 
+      console.log("[connect_account] client.start completed successfully");
       await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
 
       // Auto-import history from all user groups
+      console.log("[connect_account] fetching user groups...");
       const { getUserGroups, importChatHistory } = await import("./services/mtproto");
       const groups = await getUserGroups();
+      console.log("[connect_account] user groups count:", groups.length);
 
       if (groups.length === 0) {
         await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
@@ -298,7 +314,7 @@ bot.on("message", async (ctx) => {
       }
     } catch (error) {
       pendingAuthCodes.delete(userId);
-      console.error("MTProto auth error:", error);
+      console.error("[connect_account] MTProto auth error:", error);
       await ctx.reply(
         `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
       );

@@ -12,7 +12,11 @@ export async function buildConnectAccountStatus(options: {
   isMtProtoConfigured: boolean;
   chatHistory: ChatHistoryRepository;
 }): Promise<string> {
+  console.log("[connect_account] buildConnectAccountStatus start", {
+    isMtProtoConfigured: options.isMtProtoConfigured,
+  });
   if (!options.isMtProtoConfigured) {
+    console.log("[connect_account] MTProto NOT configured");
     return (
       "⚠️ MTProto не настроен на сервере.\n\n" +
       "Администратор должен добавить MTPROTO_API_ID и MTPROTO_API_HASH в .env"
@@ -20,6 +24,7 @@ export async function buildConnectAccountStatus(options: {
   }
 
   const allChatIds = await options.chatHistory.getAllChatIds();
+  console.log("[connect_account] getAllChatIds returned", { count: allChatIds.length });
   let statusText = "📊 <b>Статус импорта истории</b>\n\n";
 
   if (allChatIds.length === 0) {
@@ -49,6 +54,7 @@ export async function buildConnectAccountStatus(options: {
     "Это нужно для импорта истории чатов до момента добавления бота.\n\n" +
     "Отправьте ваш номер телефона в формате <code>+79123456789</code>:";
 
+  console.log("[connect_account] buildConnectAccountStatus end, text length:", statusText.length);
   return statusText;
 }
 
@@ -59,7 +65,12 @@ export async function handleConnectAccount(
 ): Promise<void> {
   try {
     const chat = ctx.chat;
+    console.log("[connect_account] handleConnectAccount entry", {
+      chatType: chat?.type,
+      chatId: chat?.id,
+    });
     if (!chat || chat.type !== "private") {
+      console.log("[connect_account] rejected: not private chat");
       await ctx.reply("Эта команда работает только в личных сообщениях со мной.");
       return;
     }
@@ -69,9 +80,10 @@ export async function handleConnectAccount(
       chatHistory,
     });
 
+    console.log("[connect_account] replying with status text length:", statusText.length);
     await ctx.reply(statusText, { parse_mode: "HTML" });
   } catch (error) {
-    console.error("Connect account error:", error);
+    console.error("[connect_account] ERROR in handleConnectAccount:", error);
     await ctx.reply("❌ Что-то пошло не так. Попробуйте позже или используйте /help.");
   }
 }
