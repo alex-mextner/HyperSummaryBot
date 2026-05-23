@@ -15,6 +15,14 @@ import {
  *  On every flush: closes unclosed tags so Telegram accepts the edit,
  *  then continues streaming inside the same tags on next flush.
  *  Adaptive rate limiting: starts fast, backs off on 429. */
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** HTML streaming writer for Telegram.
+ *  Streams HTML directly — AI outputs <b>, <i>, <a> tags live.
+ *  On every flush: closes unclosed tags so Telegram accepts the edit,
+ *  then continues streaming inside the same tags on next flush.
+ *  Adaptive rate limiting: starts fast, backs off on 429.
+ *  Animated placeholder spinner while waiting for AI output. */
 export class TelegramStreamWriter {
   private bot: Bot;
   private chatId: number;
@@ -29,8 +37,11 @@ export class TelegramStreamWriter {
 
   private flushTimer: Timer | null = null;
   private typingInterval: Timer | null = null;
+  private spinnerTimer: Timer | null = null;
   private isFinalized = false;
   private placeholderText: string;
+  private spinnerFrame = 0;
+  private hasRealContent = false;
 
   constructor(bot: Bot, chatId: number, placeholderText = "⏳") {
     this.bot = bot;
@@ -38,6 +49,7 @@ export class TelegramStreamWriter {
     this.placeholderText = placeholderText;
     this.startTyping();
     this.initPlaceholder();
+    this.startSpinner();
   }
 
   private async initPlaceholder() {
@@ -70,9 +82,40 @@ export class TelegramStreamWriter {
     }
   }
 
+  /** Animate placeholder with spinner until real AI content arrives. */
+  private startSpinner() {
+    const editMessageText = this.bot.api?.editMessageText;
+    if (!editMessageText) return;
+    this.spinnerTimer = setInterval(async () => {
+      if (this.isFinalized || this.hasRealContent || !this.messageId) return;
+      this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
+      try {
+        await editMessageText({
+          chat_id: this.chatId,
+          message_id: this.messageId,
+          text: `${this.placeholderText} ${SPINNER_FRAMES[this.spinnerFrame]}`,
+          parse_mode: "HTML",
+        });
+      } catch {
+        // ignore edit failures during spinner
+      }
+    }, 250);
+  }
+
+  private stopSpinner() {
+    if (this.spinnerTimer) {
+      clearInterval(this.spinnerTimer);
+      this.spinnerTimer = null;
+    }
+  }
+
   /** Append delta (chars / HTML tags) to the streaming buffer. */
   appendText(delta: string): void {
     if (this.isFinalized) return;
+    if (!this.hasRealContent && delta.trim()) {
+      this.hasRealContent = true;
+      this.stopSpinner();
+    }
     this.buffer += delta;
     this.scheduleFlush();
   }
@@ -212,6 +255,7 @@ export class TelegramStreamWriter {
     if (this.isFinalized) return;
     this.isFinalized = true;
     this.stopTyping();
+    this.stopSpinner();
     this.stopFlushTimer();
 
     console.log(`[stream] Finalizing message ${this.messageId} — text=${this.buffer.length} chars`);
@@ -289,6 +333,7 @@ export class TelegramStreamWriter {
 
   async deleteMessage(): Promise<void> {
     this.stopTyping();
+    this.stopSpinner();
     this.stopFlushTimer();
     if (!this.messageId) return;
     const deleteMessage = this.bot.api?.deleteMessage;
