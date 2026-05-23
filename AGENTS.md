@@ -168,3 +168,14 @@ All user-facing bot messages must follow these rules:
 - **PM2**: `pm2 reload hyper-summary-bot --update-env`
 - **Bun**: `/var/www/.bun/bin/bun`
 - **Logs**: `/var/www/hyper-summary-bot/logs/`
+
+## Server Infrastructure
+- **Reverse proxy: Caddy** (not nginx). Caddy runs as systemd service, config: `/etc/caddy/Caddyfile`.
+- Caddy imports project configs via `import /var/www/*/Caddyfile`. Each project needs its own `Caddyfile` in `/var/www/<project>/` for reverse-proxy rules.
+- **Webhook mode** requires a Caddyfile that reverse-proxies `https://104.248.84.190/webhook` → `localhost:3002`. Without it, the bot must run in **polling mode** (`WEBHOOK_URL` unset).
+- **PM2 resilience**: `autorestart: true`, `max_restarts: 10`, `min_uptime: 10s`, `max_memory_restart: 512M`. Process-level `uncaughtException` / `unhandledRejection` handlers prevent crashes.
+
+## Error Handling (Updated)
+- **Command handlers**: wrapped with `safeCommand()` — any unhandled exception is caught, logged with `[command:X]` prefix, and a user-friendly reply is sent (`"❌ Что-то пошло не так. Попробуй ещё раз или используй /help."`).
+- **Bot-level**: `bot.onError()` logs all GramIO errors.
+- **Process-level**: `process.on("uncaughtException")` and `process.on("unhandledRejection")` log and swallow — never crash the bot on transient errors.

@@ -17,6 +17,25 @@ import { handleConnectAccount } from "./bot/connect-account";
 import { resolveDMChat, toBotApiChatId } from "./bot/dm-chat-resolver";
 
 const config = loadConfig();
+/** Universal command error wrapper: catches ANY error, logs it, replies to user.
+ *  Generic — preserves GramIO derived context type so .chatHistory etc stay typed. */
+function safeCommand<TContext extends { reply: (text: string) => Promise<unknown> }>(
+  name: string,
+  handler: (ctx: TContext) => Promise<void>,
+): (ctx: TContext) => Promise<void> {
+  return async (ctx) => {
+    try {
+      await handler(ctx);
+    } catch (error) {
+      console.error(`[command:${name}] Unhandled error:`, error);
+      try {
+        await ctx.reply("❌ Что-то пошло не так. Попробуй ещё раз или используй /help.");
+      } catch (replyErr) {
+        console.error(`[command:${name}] Failed to send error reply:`, replyErr);
+      }
+    }
+  };
+}
 
 // Init database
 const db = initDatabase(config.DATABASE_PATH);
@@ -87,336 +106,361 @@ bot.onError(({ kind, error }) => {
 });
 
 // Commands
-bot.command("start", async (ctx) => {
-  await ctx.reply(
-    `👋 Привет! Я <b>${config.BOT_USERNAME}</b> — бот для саммари групповых чатов.\n\n` +
-      "📋 <b>Доступные команды:</b>\n" +
-      "/summary — Саммари последних сообщений\n" +
-      "/ask — Задать вопрос по истории чата (в ЛС)\n" +
-      "/search — Поиск по истории\n" +
-      "/note — Извлечь полезную заметку\n" +
-      "/digest — Получить дайджест (в ЛС)\n" +
-      "/help — Помощь",
-    { parse_mode: "HTML" },
-  );
-});
+bot.command(
+  "start",
+  safeCommand("start", async (ctx) => {
+    await ctx.reply(
+      `👋 Привет! Я <b>${config.BOT_USERNAME}</b> — бот для саммари групповых чатов.\n\n` +
+        "📋 <b>Доступные команды:</b>\n" +
+        "/summary — Саммари последних сообщений\n" +
+        "/ask — Задать вопрос по истории чата (в ЛС)\n" +
+        "/search — Поиск по истории\n" +
+        "/note — Извлечь полезную заметку\n" +
+        "/digest — Получить дайджест (в ЛС)\n" +
+        "/help — Помощь",
+      { parse_mode: "HTML" },
+    );
+  }),
+);
 
-bot.command("help", async (ctx) => {
-  await ctx.reply(
-    "📖 <b>Помощь</b>\n\n" +
-      "Я сохраняю историю чата и могу:\n" +
-      "• 📊 Создавать саммари разных типов\n" +
-      "• ❓ Отвечать на вопросы по истории\n" +
-      "• 🔍 Искать по сообщениям\n" +
-      "• 📝 Извлекать полезные заметки в Notion\n" +
-      "• 🎙 Обрабатывать голосовые сообщения\n\n" +
-      "Просто добавь меня в группу и используй команды!",
-    { parse_mode: "HTML" },
-  );
-});
+bot.command(
+  "help",
+  safeCommand("help", async (ctx) => {
+    await ctx.reply(
+      "📖 <b>Помощь</b>\n\n" +
+        "Я сохраняю историю чата и могу:\n" +
+        "• 📊 Создавать саммари разных типов\n" +
+        "• ❓ Отвечать на вопросы по истории\n" +
+        "• 🔍 Искать по сообщениям\n" +
+        "• 📝 Извлекать полезные заметки в Notion\n" +
+        "• 🎙 Обрабатывать голосовые сообщения\n\n" +
+        "Просто добавь меня в группу и используй команды!",
+      { parse_mode: "HTML" },
+    );
+  }),
+);
 
-bot.command("summary", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat) return;
+bot.command(
+  "summary",
+  safeCommand("summary", async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat) return;
 
-  let targetChatId: number;
+    let targetChatId: number;
 
-  if (chat.type === "private") {
-    const choice = await resolveDMChat(ctx);
-    if (!choice) return;
-    targetChatId = choice.chatId;
-  } else if (chat.type === "group" || chat.type === "supergroup") {
-    targetChatId = chat.id;
-  } else {
-    await ctx.reply("Команда работает в группах и личных сообщениях.");
-    return;
-  }
-
-  try {
-    const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
-
-    if (messages.length === 0) {
-      await ctx.reply("Нет сообщений для анализа.");
-      return;
-    }
-
-    await generateSummary({
-      chatId: targetChatId,
-      messages: messages.map((m) => ({
-        userId: m.userId,
-        userName: m.userName,
-        content: m.content,
-      })),
-      bot,
-      placeholderText: "📊 Анализирую все сообщения и генерирую подробное саммари…",
-    });
-  } catch (error) {
-    console.error("Summary error:", error);
-    const errMsg = error instanceof Error ? error.message : "";
-    if (
-      errMsg.includes("401") ||
-      errMsg.includes("token") ||
-      errMsg.includes("All AI providers failed")
-    ) {
-      await ctx.reply(
-        "❌ AI-сервисы временно недоступны (проблема с ключами API).\n" +
-          "Админ уже уведомлён. Попробуй позже.",
-      );
+    if (chat.type === "private") {
+      const choice = await resolveDMChat(ctx);
+      if (!choice) return;
+      targetChatId = choice.chatId;
+    } else if (chat.type === "group" || chat.type === "supergroup") {
+      targetChatId = chat.id;
     } else {
-      await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
-    }
-  }
-});
-
-bot.command("ask", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat) return;
-
-  const question = parseAskQuestion(ctx.text || "");
-  if (!question.trim()) {
-    await ctx.reply("❓ Задай вопрос: /ask <твой вопрос>");
-    return;
-  }
-
-  const userId = ctx.from?.id;
-  if (!userId) return;
-
-  let targetChatId: number;
-
-  if (chat.type === "private") {
-    const choice = await resolveDMChat(ctx);
-    if (!choice) return;
-    targetChatId = choice.chatId;
-  } else if (chat.type === "group" || chat.type === "supergroup") {
-    targetChatId = chat.id;
-  } else {
-    await ctx.reply("Команда работает в группах и личных сообщениях.");
-    return;
-  }
-
-  await ctx.reply("🤔 Анализирую вопрос...");
-
-  try {
-    const messages = await ctx.chatHistory.getRecent(targetChatId, 100);
-
-    if (messages.length === 0) {
-      await ctx.reply("Нет сообщений для анализа.");
+      await ctx.reply("Команда работает в группах и личных сообщениях.");
       return;
     }
 
     try {
+      const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
+
+      if (messages.length === 0) {
+        await ctx.reply("Нет сообщений для анализа.");
+        return;
+      }
+
+      await generateSummary({
+        chatId: targetChatId,
+        messages: messages.map((m) => ({
+          userId: m.userId,
+          userName: m.userName,
+          content: m.content,
+        })),
+        bot,
+        placeholderText: "📊 Анализирую все сообщения и генерирую подробное саммари…",
+      });
+    } catch (error) {
+      console.error("Summary error:", error);
+      const errMsg = error instanceof Error ? error.message : "";
+      if (
+        errMsg.includes("401") ||
+        errMsg.includes("token") ||
+        errMsg.includes("All AI providers failed")
+      ) {
+        await ctx.reply(
+          "❌ AI-сервисы временно недоступны (проблема с ключами API).\n" +
+            "Админ уже уведомлён. Попробуй позже.",
+        );
+      } else {
+        await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
+      }
+    }
+  }),
+);
+
+bot.command(
+  "ask",
+  safeCommand("ask", async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat) return;
+
+    const question = parseAskQuestion(ctx.text || "");
+    if (!question.trim()) {
+      await ctx.reply("❓ Задай вопрос: /ask <твой вопрос>");
+      return;
+    }
+
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    let targetChatId: number;
+
+    if (chat.type === "private") {
+      const choice = await resolveDMChat(ctx);
+      if (!choice) return;
+      targetChatId = choice.chatId;
+    } else if (chat.type === "group" || chat.type === "supergroup") {
+      targetChatId = chat.id;
+    } else {
+      await ctx.reply("Команда работает в группах и личных сообщениях.");
+      return;
+    }
+
+    await ctx.reply("🤔 Анализирую вопрос...");
+
+    try {
+      const messages = await ctx.chatHistory.getRecent(targetChatId, 100);
+
+      if (messages.length === 0) {
+        await ctx.reply("Нет сообщений для анализа.");
+        return;
+      }
+
+      try {
+        await bot.api.sendMessage({
+          chat_id: userId,
+          text: `🔍 <b>Вопрос:</b> ${question}\n\n<i>Анализирую ${messages.length} сообщений...</i>`,
+          parse_mode: "HTML",
+        });
+      } catch {
+        await ctx.reply("Открой ЛС со мной, чтобы получить ответ.");
+        return;
+      }
+
+      // TODO: Implement QA agent with streaming
       await bot.api.sendMessage({
         chat_id: userId,
-        text: `🔍 <b>Вопрос:</b> ${question}\n\n<i>Анализирую ${messages.length} сообщений...</i>`,
+        text: `📋 <b>Ответ:</b>\n\n${question}\n\n(Агент в разработке)`,
         parse_mode: "HTML",
       });
-    } catch {
-      await ctx.reply("Открой ЛС со мной, чтобы получить ответ.");
-      return;
+    } catch (error) {
+      console.error("Ask error:", error);
+      await ctx.reply("❌ Ошибка при обработке вопроса.");
     }
+  }),
+);
 
-    // TODO: Implement QA agent with streaming
-    await bot.api.sendMessage({
-      chat_id: userId,
-      text: `📋 <b>Ответ:</b>\n\n${question}\n\n(Агент в разработке)`,
-      parse_mode: "HTML",
-    });
-  } catch (error) {
-    console.error("Ask error:", error);
-    await ctx.reply("❌ Ошибка при обработке вопроса.");
-  }
-});
+bot.command(
+  "search",
+  safeCommand("search", async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat) return;
 
-bot.command("search", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat) return;
+    let targetChatId: number;
 
-  let targetChatId: number;
-
-  if (chat.type === "private") {
-    const choice = await resolveDMChat(ctx);
-    if (!choice) return;
-    targetChatId = choice.chatId;
-  } else if (chat.type === "group" || chat.type === "supergroup") {
-    targetChatId = chat.id;
-  } else {
-    await ctx.reply("Команда работает в группах и личных сообщениях.");
-    return;
-  }
-
-  const query = parseSearchQuery(ctx.text || "");
-  if (!query.trim()) {
-    await ctx.reply("🔍 Введи запрос: /search <текст>");
-    return;
-  }
-
-  await ctx.reply(`🔍 Ищу: "${query}"...`);
-
-  try {
-    const messages = await ctx.chatHistory.getRecent(targetChatId, 99999);
-    const results = messages.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()));
-
-    if (results.length === 0) {
-      await ctx.reply("Ничего не найдено.");
-      return;
-    }
-
-    const formatted = results
-      .slice(0, 20)
-      .map((m) => `${m.userName}: ${m.content.slice(0, 200)}`)
-      .join("\n\n");
-
-    await ctx.reply(`🔍 <b>Результаты (${results.length}):</b>\n\n${formatted}`, {
-      parse_mode: "HTML",
-    });
-  } catch (error) {
-    console.error("Search error:", error);
-    await ctx.reply("❌ Ошибка при поиске.");
-  }
-});
-
-bot.command("note", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat) return;
-
-  const { isNotionConfigured } = await import("./services/notion");
-  if (!isNotionConfigured()) {
-    await ctx.reply(
-      "📝 Notion не настроен.\n\n" + "Администратор должен добавить NOTION_TOKEN в .env",
-    );
-    return;
-  }
-
-  const session = ctx.session as Record<string, unknown>;
-  const notionDbId = session.notionDatabaseId as string | undefined;
-  if (!notionDbId) {
-    await ctx.reply(
-      "📝 Не выбрана база Notion.\n\n" +
-        "Используй /connect_notion, чтобы выбрать или создать базу для заметок.",
-    );
-    return;
-  }
-
-  let targetChatId: number;
-
-  if (chat.type === "private") {
-    const choice = await resolveDMChat(ctx);
-    if (!choice) return;
-    targetChatId = choice.chatId;
-  } else if (chat.type === "group" || chat.type === "supergroup") {
-    targetChatId = chat.id;
-  } else {
-    await ctx.reply("Команда работает в группах и личных сообщениях.");
-    return;
-  }
-
-  await ctx.reply("📝 Анализирую сообщения и извлекаю заметку…");
-
-  try {
-    const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
-
-    if (messages.length === 0) {
-      await ctx.reply("Нет сообщений для анализа.");
-      return;
-    }
-
-    const note = await extractNote(
-      messages.map((m) => ({
-        userId: m.userId,
-        userName: m.userName,
-        content: m.content,
-      })),
-    );
-
-    const { createNotePage } = await import("./services/notion");
-    const result = await createNotePage(notionDbId, {
-      ...note,
-      url:
-        chat.type === "supergroup" || chat.type === "group"
-          ? `https://t.me/c/${String(targetChatId).replace("-100", "")}`
-          : undefined,
-    });
-
-    await ctx.reply(
-      `✅ Заметка сохранена в Notion\n\n` +
-        `<b>${note.title}</b>\n` +
-        `${note.summary.slice(0, 200)}${note.summary.length > 200 ? "…" : ""}\n\n` +
-        `<a href="${result.url}">Открыть в Notion</a>`,
-      { parse_mode: "HTML" },
-    );
-  } catch (error) {
-    console.error("Note extraction error:", error);
-    const errMsg = error instanceof Error ? error.message : "";
-    if (errMsg.includes("Notion API error")) {
-      await ctx.reply(
-        "❌ Ошибка Notion API.\n\n" + "Проверь что интеграция имеет доступ к выбранной базе.",
-      );
-    } else if (errMsg.includes("not configured")) {
-      await ctx.reply("❌ Notion не настроен на сервере.");
+    if (chat.type === "private") {
+      const choice = await resolveDMChat(ctx);
+      if (!choice) return;
+      targetChatId = choice.chatId;
+    } else if (chat.type === "group" || chat.type === "supergroup") {
+      targetChatId = chat.id;
     } else {
-      await ctx.reply("❌ Ошибка при создании заметки. Попробуй позже.");
+      await ctx.reply("Команда работает в группах и личных сообщениях.");
+      return;
     }
-  }
-});
 
-bot.command("connect_notion", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat || chat.type !== "private") {
-    await ctx.reply("Эта команда работает только в личных сообщениях.");
-    return;
-  }
+    const query = parseSearchQuery(ctx.text || "");
+    if (!query.trim()) {
+      await ctx.reply("🔍 Введи запрос: /search <текст>");
+      return;
+    }
 
-  const { isNotionConfigured, searchDatabases } = await import("./services/notion");
-  if (!isNotionConfigured()) {
-    await ctx.reply(
-      "🔌 Notion не настроен на сервере.\n\n" + "Администратор должен добавить NOTION_TOKEN в .env",
-    );
-    return;
-  }
+    await ctx.reply(`🔍 Ищу: "${query}"...`);
 
-  await ctx.reply("🔍 Ищу доступные базы Notion…");
+    try {
+      const messages = await ctx.chatHistory.getRecent(targetChatId, 99999);
+      const results = messages.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()));
 
-  try {
-    const databases = await searchDatabases();
+      if (results.length === 0) {
+        await ctx.reply("Ничего не найдено.");
+        return;
+      }
 
-    if (databases.length === 0) {
+      const formatted = results
+        .slice(0, 20)
+        .map((m) => `${m.userName}: ${m.content.slice(0, 200)}`)
+        .join("\n\n");
+
+      await ctx.reply(`🔍 <b>Результаты (${results.length}):</b>\n\n${formatted}`, {
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      console.error("Search error:", error);
+      await ctx.reply("❌ Ошибка при поиске.");
+    }
+  }),
+);
+
+bot.command(
+  "note",
+  safeCommand("note", async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat) return;
+
+    const { isNotionConfigured } = await import("./services/notion");
+    if (!isNotionConfigured()) {
       await ctx.reply(
-        "📭 Не найдено баз, доступных интеграции.\n\n" +
-          "1. Открой нужную страницу в Notion\n" +
-          "2. Нажми ⋮ → Добавить связи → найди интеграцию бота\n" +
-          "3. Повтори /connect_notion",
+        "📝 Notion не настроен.\n\n" + "Администратор должен добавить NOTION_TOKEN в .env",
       );
       return;
     }
 
-    const buttons = databases.map((db) => ({
-      text: db.title,
-      callback_data: `select_notion_db:${db.id}`,
-    }));
+    const session = ctx.session as Record<string, unknown>;
+    const notionDbId = session.notionDatabaseId as string | undefined;
+    if (!notionDbId) {
+      await ctx.reply(
+        "📝 Не выбрана база Notion.\n\n" +
+          "Используй /connect_notion, чтобы выбрать или создать базу для заметок.",
+      );
+      return;
+    }
 
-    // Add option to create new database
-    buttons.push({
-      text: "➕ Создать новую базу",
-      callback_data: "create_notion_db_prompt",
-    });
+    let targetChatId: number;
 
-    const keyboard = buttons.map((b) => [b]);
+    if (chat.type === "private") {
+      const choice = await resolveDMChat(ctx);
+      if (!choice) return;
+      targetChatId = choice.chatId;
+    } else if (chat.type === "group" || chat.type === "supergroup") {
+      targetChatId = chat.id;
+    } else {
+      await ctx.reply("Команда работает в группах и личных сообщениях.");
+      return;
+    }
 
-    await ctx.reply("📁 Выбери базу для заметок:", {
-      reply_markup: { inline_keyboard: keyboard },
-    });
-  } catch (error) {
-    console.error("Notion search error:", error);
-    await ctx.reply("❌ Ошибка при поиске баз Notion. Попробуй позже.");
-  }
-});
+    await ctx.reply("📝 Анализирую сообщения и извлекаю заметку…");
 
-bot.command("digest", async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
+    try {
+      const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
 
-  await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
-});
+      if (messages.length === 0) {
+        await ctx.reply("Нет сообщений для анализа.");
+        return;
+      }
+
+      const note = await extractNote(
+        messages.map((m) => ({
+          userId: m.userId,
+          userName: m.userName,
+          content: m.content,
+        })),
+      );
+
+      const { createNotePage } = await import("./services/notion");
+      const result = await createNotePage(notionDbId, {
+        ...note,
+        url:
+          chat.type === "supergroup" || chat.type === "group"
+            ? `https://t.me/c/${String(targetChatId).replace("-100", "")}`
+            : undefined,
+      });
+
+      await ctx.reply(
+        `✅ Заметка сохранена в Notion\n\n` +
+          `<b>${note.title}</b>\n` +
+          `${note.summary.slice(0, 200)}${note.summary.length > 200 ? "…" : ""}\n\n` +
+          `<a href="${result.url}">Открыть в Notion</a>`,
+        { parse_mode: "HTML" },
+      );
+    } catch (error) {
+      console.error("Note extraction error:", error);
+      const errMsg = error instanceof Error ? error.message : "";
+      if (errMsg.includes("Notion API error")) {
+        await ctx.reply(
+          "❌ Ошибка Notion API.\n\n" + "Проверь что интеграция имеет доступ к выбранной базе.",
+        );
+      } else if (errMsg.includes("not configured")) {
+        await ctx.reply("❌ Notion не настроен на сервере.");
+      } else {
+        await ctx.reply("❌ Ошибка при создании заметки. Попробуй позже.");
+      }
+    }
+  }),
+);
+
+bot.command(
+  "connect_notion",
+  safeCommand("connect_notion", async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat || chat.type !== "private") {
+      await ctx.reply("Эта команда работает только в личных сообщениях.");
+      return;
+    }
+
+    const { isNotionConfigured, searchDatabases } = await import("./services/notion");
+    if (!isNotionConfigured()) {
+      await ctx.reply(
+        "🔌 Notion не настроен на сервере.\n\n" +
+          "Администратор должен добавить NOTION_TOKEN в .env",
+      );
+      return;
+    }
+
+    await ctx.reply("🔍 Ищу доступные базы Notion…");
+
+    try {
+      const databases = await searchDatabases();
+
+      if (databases.length === 0) {
+        await ctx.reply(
+          "📭 Не найдено баз, доступных интеграции.\n\n" +
+            "1. Открой нужную страницу в Notion\n" +
+            "2. Нажми ⋮ → Добавить связи → найди интеграцию бота\n" +
+            "3. Повтори /connect_notion",
+        );
+        return;
+      }
+
+      const buttons = databases.map((db) => ({
+        text: db.title,
+        callback_data: `select_notion_db:${db.id}`,
+      }));
+
+      // Add option to create new database
+      buttons.push({
+        text: "➕ Создать новую базу",
+        callback_data: "create_notion_db_prompt",
+      });
+
+      const keyboard = buttons.map((b) => [b]);
+
+      await ctx.reply("📁 Выбери базу для заметок:", {
+        reply_markup: { inline_keyboard: keyboard },
+      });
+    } catch (error) {
+      console.error("Notion search error:", error);
+      await ctx.reply("❌ Ошибка при поиске баз Notion. Попробуй позже.");
+    }
+  }),
+);
+
+bot.command(
+  "digest",
+  safeCommand("digest", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
+  }),
+);
 
 // In-memory store for pending MTProto auth promises
 const pendingAuthCodes = new Map<
@@ -593,25 +637,28 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
 }
 
 // MTProto account connection (DM only)
-bot.command("connect_account", async (ctx) => {
-  console.log("[connect_account] command handler triggered", {
-    userId: ctx.from?.id,
-    chatId: ctx.chat?.id,
-    chatType: ctx.chat?.type,
-  });
-  try {
-    const { isMtProtoConfigured } = await import("./services/mtproto");
-    const mtprotoOk = await isMtProtoConfigured();
-    console.log("[connect_account] isMtProtoConfigured:", mtprotoOk);
-    await handleConnectAccount(ctx, chatHistory, {
-      mtprotoConfigured: mtprotoOk,
+bot.command(
+  "connect_account",
+  safeCommand("connect_account", async (ctx) => {
+    console.log("[connect_account] command handler triggered", {
+      userId: ctx.from?.id,
+      chatId: ctx.chat?.id,
+      chatType: ctx.chat?.type,
     });
-    console.log("[connect_account] handleConnectAccount completed");
-  } catch (error) {
-    console.error("[connect_account] command handler ERROR:", error);
-    await ctx.reply("❌ Ошибка при обработке команды. Попробуйте позже.");
-  }
-});
+    try {
+      const { isMtProtoConfigured } = await import("./services/mtproto");
+      const mtprotoOk = await isMtProtoConfigured();
+      console.log("[connect_account] isMtProtoConfigured:", mtprotoOk);
+      await handleConnectAccount(ctx, chatHistory, {
+        mtprotoConfigured: mtprotoOk,
+      });
+      console.log("[connect_account] handleConnectAccount completed");
+    } catch (error) {
+      console.error("[connect_account] command handler ERROR:", error);
+      await ctx.reply("❌ Ошибка при обработке команды. Попробуйте позже.");
+    }
+  }),
+);
 
 // Handle MTProto auth flow in DMs
 bot.on("message", async (ctx) => {
@@ -1026,6 +1073,14 @@ async function main() {
     await bot.start();
   }
 }
+
+// Process-level safety nets — never crash on transient / unhandled errors
+process.on("uncaughtException", (err) => {
+  console.error("[process] uncaughtException:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandledRejection:", reason);
+});
 
 main().catch((err) => {
   console.error("Failed to start bot:", err);
