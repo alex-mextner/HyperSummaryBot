@@ -166,6 +166,39 @@ export async function importChatHistory(
     messages.map((m) => Number(m.id)),
   );
 
+  // Build user ID → name lookup from message senders
+  const senderIds = new Set<number>();
+  for (const msg of messages) {
+    const uid = msg.fromId?.userId ? Number(msg.fromId.userId) : null;
+    if (uid && uid > 0) senderIds.add(uid);
+  }
+
+  const userNameMap = new Map<number, string>();
+  if (senderIds.size > 0) {
+    try {
+      const usersResult = await client.call({
+        _: "users.getUsers",
+        id: Array.from(senderIds).map(
+          (id) => ({ _: "inputUser" as const, userId: id, accessHash: BigInt(0) }) as any,
+        ),
+      });
+      const users = (usersResult as any).users || [];
+      for (const u of users) {
+        if (u._ === "user") {
+          const name = u.username
+            ? `@${u.username}`
+            : u.firstName
+              ? `${u.firstName}${u.lastName ? ` ${u.lastName}` : ""}`
+              : String(u.id);
+          userNameMap.set(Number(u.id), name);
+        }
+      }
+      console.log(`[mtproto] Resolved ${userNameMap.size}/${senderIds.size} user names`);
+    } catch (e) {
+      console.warn("[mtproto] Failed to resolve user names:", e);
+    }
+  }
+
   // Import to database (INSERT OR REPLACE handles edits)
   let imported = 0;
   let skipped = 0;
@@ -185,7 +218,8 @@ export async function importChatHistory(
         : fromId?.channelId
           ? Number(fromId.channelId)
           : 0;
-      const userName = fromId ? String(fromId.userId || fromId.channelId) : null;
+      const resolvedName = fromId?.userId ? userNameMap.get(Number(fromId.userId)) : null;
+      const userName = resolvedName ?? (fromId ? String(fromId.userId || fromId.channelId) : null);
 
       await chatHistoryRepo.save({
         chatId: dbChatId,

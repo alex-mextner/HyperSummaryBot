@@ -1,47 +1,124 @@
-/** Message sending safety utilities — HTML tag closing, chunking, rate limiting. */
+/** Message sending safety utilities — HTML sanitization, tag closing, chunking, rate limiting. */
 
 // Telegram message limit (keeping 96 chars buffer for safety)
 export const TG_MSG_LIMIT = 4000;
 
-// Void / self-closing HTML tags that don't need closing
+// ── Telegram Bot API allowed HTML tags ──────────────────────────────────────
+// https://core.telegram.org/bots/api#html-style
+const ALLOWED_TAGS = new Set([
+  "b",
+  "strong", // bold
+  "i",
+  "em", // italic
+  "u",
+  "ins", // underline
+  "s",
+  "strike",
+  "del", // strikethrough
+  "span", // spoiler (with class="tg-spoiler")
+  "tg-spoiler", // spoiler shorthand
+  "a", // inline URL / user mention
+  "tg-emoji", // custom emoji
+  "tg-time", // time formatting
+  "code", // inline code
+  "pre", // preformatted block
+  "blockquote", // quotation
+]);
+
+// Attributes allowed per tag (empty set = no attributes except where specified)
+const ALLOWED_ATTRS: Record<string, Set<string>> = {
+  span: new Set(["class"]),
+  a: new Set(["href"]),
+  "tg-emoji": new Set(["emoji-id"]),
+  "tg-time": new Set(["unix", "format"]),
+  pre: new Set([]),
+  blockquote: new Set(["expandable"]),
+};
+
+// Self-closing / void tags that don't need closing in Telegram HTML
 const VOID_TAGS = new Set([
-  "area",
-  "base",
   "br",
-  "col",
-  "embed",
   "hr",
   "img",
   "input",
-  "link",
   "meta",
+  "link",
+  "area",
+  "base",
+  "col",
+  "embed",
   "param",
   "source",
   "track",
   "wbr",
 ]);
 
-/** Close any unclosed HTML tags at the end of a string. */
+/** Strip all HTML tags and attributes that are NOT in Telegram's allowlist.
+ *  Preserves allowed tags and their permitted attributes.
+ *  Does NOT close unclosed tags — use closeUnclosedHtmlTags after this. */
+export function sanitizeTelegramHtml(html: string): string {
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/g;
+  return html.replace(tagRegex, (_full, slash, tagName, attrs) => {
+    const lowerTag = tagName.toLowerCase();
+
+    // Tag not allowed → strip completely (replace with empty string)
+    if (!ALLOWED_TAGS.has(lowerTag)) {
+      return "";
+    }
+
+    // Allowed tag without attributes → keep as-is
+    if (!attrs || !ALLOWED_ATTRS[lowerTag]) {
+      return `<${slash}${tagName}>`;
+    }
+
+    // Parse and filter attributes
+    const attrRegex = /([a-zA-Z-]+)(?:="([^"]*)"|'([^']*)'|(\S*))?/g;
+    const allowed = ALLOWED_ATTRS[lowerTag];
+    let keptAttrs = "";
+    let m;
+
+    while ((m = attrRegex.exec(attrs)) !== null) {
+      const attrName = m[1]!.toLowerCase();
+      const attrValue = m[2] || m[3] || m[4] || "";
+      if (allowed.has(attrName)) {
+        // For href, do basic URL validation
+        if (attrName === "href" && !isValidUrl(attrValue)) {
+          continue;
+        }
+        keptAttrs += ` ${attrName}="${attrValue}"`;
+      }
+    }
+
+    return `<${slash}${tagName}${keptAttrs}>`;
+  });
+}
+
+function isValidUrl(url: string): boolean {
+  return /^https?:\/\/|^tg:\/\//.test(url);
+}
+
+/** Close any unclosed HTML tags at the end of a string.
+ *  Only counts ALLOWED_TAGS to avoid closing stripped tags. */
 export function closeUnclosedHtmlTags(html: string): string {
   const openTags: string[] = [];
-  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*?>/g;
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)[^>]*?>/g;
   let match;
 
   while ((match = tagRegex.exec(html)) !== null) {
     const fullTag = match[0];
-    const tagName = match[1]!.toLowerCase();
+    const tagName = match[2]!.toLowerCase();
+
+    // Skip tags that were stripped by sanitizeTelegramHtml
+    if (!ALLOWED_TAGS.has(tagName)) continue;
 
     if (fullTag.startsWith("</")) {
-      // Closing tag: remove matching open tag (last occurrence)
       const idx = openTags.lastIndexOf(tagName);
       if (idx !== -1) openTags.splice(idx, 1);
     } else if (!fullTag.endsWith("/>") && !VOID_TAGS.has(tagName)) {
-      // Opening tag (not self-closing, not void)
       openTags.push(tagName);
     }
   }
 
-  // Close tags in reverse order (LIFO)
   return (
     html +
     openTags

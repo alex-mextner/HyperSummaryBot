@@ -64,9 +64,8 @@ describe("generateSummary", () => {
     expect(userPrompt).toContain("Alice: Msg A");
     expect(userPrompt).toContain("Bob: Msg B");
     expect(userPrompt).toContain("---");
-    expect(userPrompt).toContain("== УЧАСТНИКИ ЧАТА ==");
-    expect(userPrompt).toContain("1 → Alice");
-    expect(userPrompt).toContain("2 → Bob");
+    expect(userPrompt).not.toContain("1 →");
+    expect(userPrompt).not.toContain("2 →");
   });
 
   test("returns result text", async () => {
