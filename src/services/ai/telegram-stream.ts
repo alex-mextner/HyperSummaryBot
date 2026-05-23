@@ -7,6 +7,7 @@ import {
   ChatRateLimiter,
   isTelegramRateLimit,
   getRetryDelay,
+  sanitizeTelegramHtml,
 } from "../../utils/message-safety";
 
 export class TelegramStreamWriter {
@@ -183,7 +184,8 @@ export class TelegramStreamWriter {
     if (!plainText || plainText === "⏳") return;
 
     const html = markdownToHtml(plainText);
-    const chunks = splitHtmlText(html, TG_MSG_LIMIT);
+    const safeHtml = sanitizeTelegramHtml(html);
+    const chunks = splitHtmlText(safeHtml, TG_MSG_LIMIT);
 
     const deleteMessage = this.bot.api?.deleteMessage;
     const sendMessage = this.bot.api?.sendMessage;
