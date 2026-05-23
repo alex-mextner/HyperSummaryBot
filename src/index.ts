@@ -373,45 +373,44 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     if (groups.length === 0) {
       await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
     } else {
-      const importableGroups = groups.filter((g) => isGroupKnown(g.id, g.type));
+      const importableGroups =
+        knownGroupIds.size > 0 ? groups.filter((g) => isGroupKnown(g.id, g.type)) : groups; // fallback: import all if we don't know which groups have the bot yet
+
       console.log(
         "[connect_account] importable groups:",
         importableGroups.length,
         "/",
         groups.length,
+        knownGroupIds.size > 0 ? "(filtered)" : "(fallback — all)",
       );
 
-      if (importableGroups.length === 0) {
-        await ctx.reply(
-          "📭 Вижу твои группы в Telegram, но меня в них пока не добавили.\n\n" +
-            "Добавь меня в нужные группы, и я начну собирать историю автоматически.",
-        );
-      } else {
-        await ctx.reply(
-          `📥 Найдено ${importableGroups.length} групп, где я есть. Начинаю импорт истории...`,
-        );
+      await ctx.reply(`📥 Найдено ${importableGroups.length} групп. Начинаю импорт истории...`);
 
-        // Sequential import with delay between groups to avoid FLOOD_WAIT
-        for (const group of importableGroups) {
-          try {
-            const result = await importChatHistory(chatHistory, group.id, {
-              limit: MAX_CHAT_HISTORY,
-            });
-            console.log(
-              `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
-            );
-            // 2-second delay between groups to respect Telegram rate limits
-            await new Promise((r) => setTimeout(r, 2000));
-          } catch (err) {
-            console.error(`Failed to import ${group.title}:`, err);
-          }
+      let importedCount = 0;
+      let skippedCount = 0;
+
+      // Sequential import with delay between groups to avoid FLOOD_WAIT
+      for (const group of importableGroups) {
+        try {
+          const result = await importChatHistory(chatHistory, group.id, {
+            limit: MAX_CHAT_HISTORY,
+          });
+          importedCount += result.imported;
+          console.log(
+            `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
+          );
+        } catch (err) {
+          skippedCount++;
+          console.error(`Failed to import ${group.title}:`, err);
         }
-
-        await ctx.reply(
-          `🚀 Импорт завершён для ${importableGroups.length} групп.\n\n` +
-            "История будет доступна для /summary и /search.",
-        );
+        // 2-second delay between groups to respect Telegram rate limits
+        await new Promise((r) => setTimeout(r, 2000));
       }
+
+      await ctx.reply(
+        `🚀 Импорт завершён: ${importedCount} сообщений из ${importableGroups.length - skippedCount} групп.\n\n` +
+          "История будет доступна для /summary и /search.",
+      );
     }
   } catch (error) {
     pendingAuthCodes.delete(userId);
