@@ -1,0 +1,8 @@
+hyper-summary-bot.invntrm.ru {
+	reverse_proxy localhost:3003
+
+	log {
+		output file /var/log/caddy/hyper-summary-bot.log
+		format console
+	}
+}

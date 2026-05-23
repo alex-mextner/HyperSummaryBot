@@ -97,6 +97,6 @@ export function loadConfig(): EnvConfig {
     TEST_API_PASSWORD: process.env.TEST_API_PASSWORD,
     TEST_API_PORT: process.env.TEST_API_PORT
       ? Number.parseInt(process.env.TEST_API_PORT, 10)
-      : 3001,
+      : 3003,
   };
 }
