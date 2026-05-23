@@ -43,6 +43,9 @@ const db = initDatabase(config.DATABASE_PATH);
 const chatHistory = new ChatHistoryRepository(db);
 const debtTracker = new DebtTracker(db);
 
+// Bot's own Telegram user ID — populated at startup, used to filter out bot messages
+let botUserId = 0;
+
 // Track chats where the bot is actually present — used to filter MTProto import
 const knownGroupIds = new Set<number>();
 
@@ -162,7 +165,10 @@ bot.command(
     }
 
     try {
-      const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
+      const allMessages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
+
+      // Filter out bot's own messages from analysis (old entries + current)
+      const messages = allMessages.filter((m) => m.userId !== botUserId);
 
       if (messages.length === 0) {
         await ctx.reply("Нет сообщений для анализа.");
@@ -976,6 +982,9 @@ bot.on("message", async (ctx) => {
   const chat = ctx.chat;
   if (!chat) return;
 
+  // Skip bot's own messages — don't pollute chat history with placeholders and summaries
+  if (ctx.from?.id && botUserId && ctx.from.id === botUserId) return;
+
   // Only process group chats
   if (chat.type !== "group" && chat.type !== "supergroup") return;
   knownGroupIds.add(chat.id);
@@ -1073,6 +1082,15 @@ async function main() {
   // Load known groups from DB before any imports run
   await loadKnownGroupIds();
   await registerBotCommands();
+
+  // Fetch bot's own user ID to filter out bot messages from history
+  try {
+    const me = await bot.api.getMe();
+    botUserId = me.id;
+    console.log(`🤖 Bot user ID: ${botUserId}`);
+  } catch (err) {
+    console.warn("Failed to fetch bot user ID:", err);
+  }
 
   // Start HTTP server: webhook receiver (prod) or test API (dev)
   if (config.WEBHOOK_URL) {

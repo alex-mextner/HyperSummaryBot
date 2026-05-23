@@ -19,19 +19,19 @@ describe("TelegramStreamWriter", () => {
     expect(sendCalls[0]!.chat_id).toBe(123);
   });
 
-  test("appendText schedules flush and edits message with plain text", async () => {
+  test("appendText schedules flush and edits message with HTML", async () => {
     const bot = createMockBot();
     const writer = new TelegramStreamWriter(bot as any, 123);
     await new Promise((r) => setTimeout(r, 50));
 
-    writer.appendText("Hello");
+    writer.appendText("<b>Hello</b>");
     await new Promise((r) => setTimeout(r, 100));
 
     const editCalls = gramioApiCalls.filter((c) => c.method === "editMessageText");
     expect(editCalls.length).toBeGreaterThan(0);
     expect(editCalls[0]!.text).toContain("Hello");
-    // No parse_mode during streaming — plain text avoids HTML parse errors
-    expect(editCalls[0]!.parse_mode).toBeUndefined();
+    // HTML streaming — parse_mode must be HTML so tags render live
+    expect(editCalls[0]!.parse_mode).toBe("HTML");
   });
 
   test("finalize stops typing and sends final HTML chunks", async () => {
