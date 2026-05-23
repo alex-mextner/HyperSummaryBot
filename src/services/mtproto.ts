@@ -424,19 +424,26 @@ export async function startRealtimeSync(
     console.log(`[MTProto] Synced message ${msgId} from chat ${rawChatId} (dbChatId=${dbChatId})`);
   };
 
-  // mtcute uses event emitter pattern for updates
+  // mtcute uses Emitter for updates (object with .add(), not function)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const c = client as any;
-  if (c.onUpdate) {
-    c.onUpdate(handler);
+  let active = true;
+  const wrappedHandler = (update: unknown) => {
+    if (!active) return;
+    return handler(update);
+  };
+
+  if (c.onUpdate?.add) {
+    c.onUpdate.add(wrappedHandler);
   } else if (c.updates?.on) {
-    c.updates.on("raw", handler);
+    c.updates.on("raw", wrappedHandler);
   }
 
   return () => {
+    active = false;
     // mtcute cleanup if available
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (client as any).updates?.off?.("raw", handler);
+    (client as any).updates?.off?.("raw", wrappedHandler);
   };
 }
 
