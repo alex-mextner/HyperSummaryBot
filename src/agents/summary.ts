@@ -16,77 +16,26 @@ interface SummaryAgentOptions {
 
 const SUMMARY_SYSTEM_PROMPT = `Ты — ассистент для анализа групповых чатов. Создай максимально подробное комбинированное саммари.
 
-ПРАВИЛА ИМЁН:
-- Используй ТОЛЬКО имена из справочника участников в конце сообщений
-- НИКОГДА не используй числовые ID (716928723) в тексте
-- НИКОГДА не пиши "участник", "пользователь", "user" — всегда конкретное имя или @ник
-- Если имя неизвестно — используй @ник или "человек с ником X"
+САМОЕ ВАЖНОЕ — ИМЕНА:
+- В начале сообщений тебе дадут справочник: "123456 → @Вася"
+- Ты ДОЛЖЕН использовать ТОЛЬКО имя справа от стрелки (@Вася)
+- НИКОГДА не используй числовые ID (123456) в ответе
+- НИКОГДА не пиши "участник", "пользователь", "user", "человек"
+- Если имя неизвестно — используй "@ник" или перефразируй без имени
 
-ПРАВИЛА КОНКРЕТИКИ:
-- Запрещено: "разбить в указанном месте" → пиши конкретно: "разбить палатки у домиков по ссылке [url]"
-- Запрещено: "участники начинают сбрасывать деньги" → пиши: "Алекс сбросил 1500₽, Марина — 2900₽ за еду в Макдональдсе"
-- Запрещено: "гибридное размещение" → пиши: "палатки + домики по ссылке, обсуждали удобство каждого"
-- Запрещено: "сообщение о трате" → пиши: "Марина написала, что потратила 2900₽ в Макдональдсе"
-- Каждый факт должен быть приписан конкретному человеку по имени
+КОНКРЕТИКА (запрещено → как надо):
+- "разбить в указанном месте" → "разбить палатки у домиков по ссылке maps.app.goo.gl/..."
+- "участники начинают сбрасывать деньги" → "@Вася скинул 1500₽, @Марина — 2900₽ за еду в Макдональдсе"
+- "сообщение о трате" → "@Марина написала, что потратила 2900₽ в Макдональдсе"
+- "обсуждали варианты" → "@Вася предложил X, @Марина — Y"
+- Каждый факт приписан конкретному человеку по имени
 
-ФОРМАТИРОВАНИЕ:
-- Используй markdown: заголовки, списки, **жирный текст**
-- Для action items используй markdown-таблицу
-- Не придумывай фактов — только из предоставленных сообщений
-- Если чего-то нет — честно напиши "Не обсуждалось"
+ФОРМАТ:
+- Markdown: заголовки, списки, **жирный текст**
+- Таблицы допустимы для action items (markdown-синтаксис)
+- Не придумывай фактов — только из сообщений
+- Если нет информации — напиши "Не обсуждалось"
 - Язык: русский`;
-
-const REVIEW_PROMPT = `Ты — редактор саммари. Проверь текст на ошибки и неточности.
-
-Проверь каждый пункт:
-1. Есть ли сырые числовые ID? Если да — замени на имена из справочника
-2. Есть ли безликие формулировки ("участники", "указанном месте", "начинают")? Замени на конкретных людей и факты
-3. Каждый факт приписан конкретному человеку по имени?
-4. Есть ли противоречия? (например, один говорит "да", другой "нет" на тот же вопрос)
-5. Всё ли выводы подтверждены цитатами из сообщений?
-
-Выдай ИСПРАВЛЕННУЮ версию полностью. Не комментарии — только финальный текст.`;
-
-async function generateDraft(
-  formattedMessages: string,
-  callbacks: { onTextDelta?: (text: string) => void },
-): Promise<string> {
-  const result = await aiStreamRound(
-    {
-      messages: [
-        { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
-        },
-      ],
-      maxTokens: 4096,
-      temperature: 0.3,
-    },
-    callbacks,
-  );
-  return result.text;
-}
-
-async function reviewAndRefine(draft: string, formattedMessages: string): Promise<string> {
-  const result = await aiStreamRound(
-    {
-      messages: [
-        { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
-        },
-        { role: "assistant", content: draft },
-        { role: "user", content: REVIEW_PROMPT },
-      ],
-      maxTokens: 4096,
-      temperature: 0.2,
-    },
-    {},
-  );
-  return result.text;
-}
 
 export async function generateSummary(options: SummaryAgentOptions): Promise<string> {
   const writer = new TelegramStreamWriter(options.bot, options.chatId);
@@ -94,25 +43,36 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
   const { text: formattedMessages, lookup } = formatMessagesForPrompt(options.messages);
 
   try {
-    // Phase 1: Generate draft with streaming (user sees live text)
-    const draft = await generateDraft(formattedMessages, {
-      onTextDelta: (text) => writer.appendText(text),
-    });
+    // Single-phase: generate and stream directly
+    const result = await aiStreamRound(
+      {
+        messages: [
+          { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
+          },
+        ],
+        maxTokens: 4096,
+        temperature: 0.3,
+      },
+      {
+        onTextDelta: (text) => writer.appendText(text),
+      },
+    );
 
-    // Phase 2: Review and refine (silent, no streaming)
-    writer.appendText("\n\n[проверка фактов…]");
-    let final = await reviewAndRefine(draft, formattedMessages);
+    let final = sanitizeAttributions(result.text, lookup);
 
-    // Sanitize any remaining ID leaks
-    final = sanitizeAttributions(final, lookup);
-
-    // Safety check
+    // Post-process: if raw IDs still present, do a quick replacement
     const knownIds = Array.from(lookup.names.keys());
     if (containsRawUserIds(final, knownIds)) {
-      console.warn("[summary] Raw user IDs still present after sanitization");
+      console.warn("[summary] Raw IDs in output, forcing replacement");
+      for (const [userId, name] of lookup.names) {
+        final = final.replace(new RegExp(`\\b${userId}\\b`, "g"), name);
+      }
     }
 
-    // Replace the streamed draft with the refined final version
+    // Replace streamed text with cleaned version for final HTML rendering
     writer.replaceText(final);
 
     await writer.finalize();

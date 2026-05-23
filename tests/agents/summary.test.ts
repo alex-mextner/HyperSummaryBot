@@ -41,13 +41,13 @@ describe("generateSummary", () => {
     });
 
     expect(result).toBe("Mock response");
-    expect(callCount).toBe(2); // draft + review
+    expect(callCount).toBe(1); // single-phase
     expect(capturedParams).not.toBeNull();
-    expect(capturedParams.messages).toHaveLength(4); // system + user + assistant draft + review prompt
+    expect(capturedParams.messages).toHaveLength(2); // system + user
     expect(capturedParams.messages[0].role).toBe("system");
     expect(capturedParams.messages[0].content).toContain("саммари");
     expect(capturedParams.max_tokens).toBe(4096);
-    expect(capturedParams.temperature).toBe(0.2);
+    expect(capturedParams.temperature).toBe(0.3);
   });
 
   test("includes formatted messages with user lookup", async () => {
@@ -64,9 +64,9 @@ describe("generateSummary", () => {
     expect(userPrompt).toContain("Alice: Msg A");
     expect(userPrompt).toContain("Bob: Msg B");
     expect(userPrompt).toContain("---");
-    expect(userPrompt).toContain("УЧАСТНИКИ ЧАТА:");
-    expect(userPrompt).toContain("Alice");
-    expect(userPrompt).toContain("Bob");
+    expect(userPrompt).toContain("== УЧАСТНИКИ ЧАТА ==");
+    expect(userPrompt).toContain("1 → Alice");
+    expect(userPrompt).toContain("2 → Bob");
   });
 
   test("returns result text", async () => {

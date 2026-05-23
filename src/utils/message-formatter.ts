@@ -40,24 +40,27 @@ export function buildUserLookup(
 }
 
 /** Format messages for AI prompt, replacing raw IDs with display names.
- *  Never includes raw userId in the output. */
+ *  Never includes raw userId in the output.
+ *  Lookup section is placed FIRST so the model sees names before messages. */
 export function formatMessagesForPrompt(
   messages: Array<{ userId: number; userName: string | null; content: string }>,
 ): { text: string; lookup: UserLookup } {
   const lookup = buildUserLookup(messages);
+
+  const lookupSection =
+    lookup.entries.length > 0
+      ? `== УЧАСТНИКИ ЧАТА ==\n` +
+        lookup.entries.map((e) => `${e.userId} → ${e.name}`).join("\n") +
+        `\n\nВАЖНО: Используй ТОЛЬКО имена справа от стрелки. НИКОГДА не пиши числа слева.\n\n`
+      : "";
 
   const lines = messages.map((m) => {
     const name = lookup.names.get(m.userId) ?? "Unknown";
     return `${name}: ${m.content}`;
   });
 
-  const lookupSection =
-    lookup.entries.length > 0
-      ? `\n\nУЧАСТНИКИ ЧАТА:\n` + lookup.entries.map((e) => `- ${e.name}`).join("\n")
-      : "";
-
   return {
-    text: lines.join("\n---\n") + lookupSection,
+    text: lookupSection + lines.join("\n---\n"),
     lookup,
   };
 }
