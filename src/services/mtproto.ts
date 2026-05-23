@@ -134,7 +134,9 @@ export async function importChatHistory(
   return { imported, skipped };
 }
 
-export async function getUserGroups(): Promise<Array<{ id: number; title: string }>> {
+export async function getUserGroups(): Promise<
+  Array<{ id: number; title: string; type: "group" | "channel" }>
+> {
   const client = getClient();
   await client.start();
 
@@ -149,15 +151,17 @@ export async function getUserGroups(): Promise<Array<{ id: number; title: string
 
   const dialogs = (result as any).dialogs || [];
   const chats = (result as any).chats || [];
-  const chatMap = new Map<number, string>();
+  const chatMap = new Map<number, { title: string; type: "group" | "channel" }>();
 
   for (const chat of chats) {
-    if (chat._ === "chat" || chat._ === "channel") {
-      chatMap.set(chat.id, chat.title || "Unknown");
+    if (chat._ === "chat") {
+      chatMap.set(chat.id, { title: chat.title || "Unknown", type: "group" });
+    } else if (chat._ === "channel") {
+      chatMap.set(chat.id, { title: chat.title || "Unknown", type: "channel" });
     }
   }
 
-  const groups: Array<{ id: number; title: string }> = [];
+  const groups: Array<{ id: number; title: string; type: "group" | "channel" }> = [];
   for (const dialog of dialogs) {
     const peer = dialog.peer;
     let chatId: number | null = null;
@@ -168,8 +172,11 @@ export async function getUserGroups(): Promise<Array<{ id: number; title: string
       chatId = peer.channelId;
     }
 
-    if (chatId && chatMap.has(chatId)) {
-      groups.push({ id: chatId, title: chatMap.get(chatId)! });
+    if (chatId) {
+      const info = chatMap.get(chatId);
+      if (info) {
+        groups.push({ id: chatId, title: info.title, type: info.type });
+      }
     }
   }
 

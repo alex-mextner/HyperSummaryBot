@@ -24,11 +24,25 @@ const chatHistory = new ChatHistoryRepository(db);
 // Track chats where the bot is actually present — used to filter MTProto import
 const knownGroupIds = new Set<number>();
 
+/** Convert MTProto peer ID to Bot API chat ID. */
+function toBotApiChatId(mtprotoId: number, type: "group" | "channel"): number {
+  if (type === "channel") return -1000000000000 - mtprotoId; // -100<channelId>
+  return -mtprotoId; // regular group
+}
+
+/** Check if a group (by MTProto id + type) is known to the bot. */
+function isGroupKnown(mtprotoId: number, type: "group" | "channel"): boolean {
+  return knownGroupIds.has(mtprotoId) || knownGroupIds.has(toBotApiChatId(mtprotoId, type));
+}
+
 async function loadKnownGroupIds(): Promise<void> {
   try {
     const ids = await chatHistory.getAllChatIds();
     for (const id of ids) knownGroupIds.add(id);
-    console.log(`📋 Pre-loaded ${knownGroupIds.size} known chats from DB`);
+    console.log(
+      `📋 Pre-loaded ${knownGroupIds.size} known chats from DB`,
+      Array.from(knownGroupIds),
+    );
   } catch {
     console.warn("📋 Failed to pre-load known chats from DB");
   }
@@ -39,7 +53,7 @@ async function runInitialImport(): Promise<void> {
   try {
     const { getUserGroups, importChatHistory } = await import("./services/mtproto");
     const groups = await getUserGroups();
-    const importableGroups = groups.filter((g) => knownGroupIds.has(g.id));
+    const importableGroups = groups.filter((g) => isGroupKnown(g.id, g.type));
     console.log(
       `[startup] ${groups.length} user groups total, ${importableGroups.length} importable (bot is present)`,
     );
@@ -359,7 +373,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     if (groups.length === 0) {
       await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
     } else {
-      const importableGroups = groups.filter((g) => knownGroupIds.has(g.id));
+      const importableGroups = groups.filter((g) => isGroupKnown(g.id, g.type));
       console.log(
         "[connect_account] importable groups:",
         importableGroups.length,
