@@ -204,7 +204,40 @@ const pendingAuthCodes = new Map<
   { resolve: (code: string) => void; reject: (err: Error) => void }
 >();
 
+// Cooldown and attempt tracking per user
+const CONNECT_COOLDOWN_MS = 60_000;
+const MAX_CODE_ATTEMPTS = 3;
+const connectAttempts = new Map<number, number>();
+const codeAttemptCounts = new Map<number, number>();
+
+function isConnectCooldownActive(userId: number): boolean {
+  const last = connectAttempts.get(userId);
+  return last !== undefined && Date.now() - last < CONNECT_COOLDOWN_MS;
+}
+
+/** Strip spaces, dashes, parentheses; ensure leading '+'. */
+function normalizePhone(raw: string): string | undefined {
+  const normalized = raw.replace(/[\s\-()]/g, "");
+  if (!normalized) return undefined;
+  return normalized.startsWith("+") ? normalized : `+${normalized}`;
+}
+
+/** Strip spaces and dashes from OTP (users add separators to avoid Telegram anti-phishing). */
+function normalizeOtpCode(raw: string): string {
+  return raw.replace(/[\s-]/g, "");
+}
+
 async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promise<void> {
+  if (isConnectCooldownActive(userId)) {
+    const last = connectAttempts.get(userId)!;
+    const remaining = Math.ceil((CONNECT_COOLDOWN_MS - (Date.now() - last)) / 1000);
+    await ctx.reply(`⏳ Подождите ${remaining} секунд перед следующей попыткой.`);
+    return;
+  }
+
+  connectAttempts.set(userId, Date.now());
+  codeAttemptCounts.set(userId, 0);
+
   try {
     console.log("[connect_account] importing TelegramClient...");
     const { TelegramClient } = await import("@mtcute/bun");
@@ -223,7 +256,8 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
         console.log("[connect_account] prompting for auth code");
         await ctx.reply(
           "🔑 <b>Код отправлен в Telegram</b>\n\n" +
-            "Введите код из сообщения от Telegram (без дефисов):",
+            "Введите код из сообщения от Telegram.\n\n" +
+            "<i>Совет: можешь добавить пробелы или дефисы, чтобы Telegram не скрыл сообщение.</i>",
           { parse_mode: "HTML" },
         );
 
@@ -234,6 +268,8 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     });
 
     console.log("[connect_account] client.start completed successfully");
+    codeAttemptCounts.delete(userId);
+    connectAttempts.delete(userId);
     await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
 
     // Auto-import history from all user groups
@@ -269,6 +305,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     }
   } catch (error) {
     pendingAuthCodes.delete(userId);
+    codeAttemptCounts.delete(userId);
     console.error("[connect_account] MTProto auth error:", error);
     await ctx.reply(
       `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -309,7 +346,26 @@ bot.on("message", async (ctx) => {
   // Check if user has a pending code promise
   const pendingAuth = pendingAuthCodes.get(userId);
   if (pendingAuth) {
-    const code = text.trim().replace(/-/g, "");
+    // Normalize: strip spaces and dashes that user added to avoid Telegram anti-phishing
+    const rawCode = text.trim();
+    const code = normalizeOtpCode(rawCode);
+
+    // Validate: must be 5 digits after normalization
+    if (!/^\d{5}$/.test(code)) {
+      await ctx.reply("❌ Код должен содержать ровно 5 цифр. Попробуй ещё раз.");
+      return;
+    }
+
+    const attempts = (codeAttemptCounts.get(userId) ?? 0) + 1;
+    codeAttemptCounts.set(userId, attempts);
+
+    if (attempts > MAX_CODE_ATTEMPTS) {
+      pendingAuthCodes.delete(userId);
+      codeAttemptCounts.delete(userId);
+      await ctx.reply("❌ Слишком много попыток. Начни заново: /connect_account");
+      return;
+    }
+
     pendingAuth.resolve(code);
     pendingAuthCodes.delete(userId);
     return;
@@ -319,7 +375,11 @@ bot.on("message", async (ctx) => {
   const contactPhone = ctx.contact?.phoneNumber;
   if (contactPhone) {
     console.log("[connect_account] contact received", { userId, contactPhone });
-    const phone = contactPhone.startsWith("+") ? contactPhone : `+${contactPhone}`;
+    const phone = normalizePhone(contactPhone);
+    if (!phone) {
+      await ctx.reply("❌ Не удалось распознать номер из контакта. Введи вручную: +79123456789");
+      return;
+    }
     await ctx.reply(`📱 Получен номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...", {
       reply_markup: { remove_keyboard: true },
     });
@@ -328,14 +388,17 @@ bot.on("message", async (ctx) => {
   }
 
   // Handle phone number input for MTProto auth
-  if (/^\+\d{10,15}$/.test(text.trim())) {
-    const phone = text.trim();
-    console.log("[connect_account] phone number received", { userId, phone });
+  const normalizedPhone = text.trim() ? normalizePhone(text.trim()) : undefined;
+  if (normalizedPhone && /^\+\d{7,15}$/.test(normalizedPhone)) {
+    console.log("[connect_account] phone number received", { userId, phone: normalizedPhone });
 
-    await ctx.reply(`📱 Номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...", {
-      reply_markup: { remove_keyboard: true },
-    });
-    await startMtProtoAuth(ctx, userId, phone);
+    await ctx.reply(
+      `📱 Номер: ${normalizedPhone}\n\n` + "Отправляю запрос на код подтверждения...",
+      {
+        reply_markup: { remove_keyboard: true },
+      },
+    );
+    await startMtProtoAuth(ctx, userId, normalizedPhone);
     return;
   }
 });
