@@ -15,6 +15,7 @@ import {
 } from "./bot/message-processor";
 import { handleConnectAccount } from "./bot/connect-account";
 import { resolveDMChat, toBotApiChatId } from "./bot/dm-chat-resolver";
+import { DebtTracker } from "./services/debt-tracker";
 
 const config = loadConfig();
 /** Universal command error wrapper: catches ANY error, logs it, replies to user.
@@ -40,6 +41,7 @@ function safeCommand<TContext extends { reply: (text: string) => Promise<unknown
 // Init database
 const db = initDatabase(config.DATABASE_PATH);
 const chatHistory = new ChatHistoryRepository(db);
+const debtTracker = new DebtTracker(db);
 
 // Track chats where the bot is actually present — used to filter MTProto import
 const knownGroupIds = new Set<number>();
@@ -174,8 +176,10 @@ bot.command(
           userId: m.userId,
           userName: m.userName,
           content: m.content,
+          messageId: m.messageId,
         })),
         bot,
+        debtTracker,
         placeholderText: "📊 Анализирую все сообщения и генерирую подробное саммари…",
       });
     } catch (error) {
@@ -460,6 +464,46 @@ bot.command(
     if (!userId) return;
 
     await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
+  }),
+);
+
+bot.command(
+  "debts",
+  safeCommand("debts", async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat) return;
+
+    let targetChatId: number;
+    if (chat.type === "private") {
+      const choice = await resolveDMChat(ctx);
+      if (!choice) return;
+      targetChatId = choice.chatId;
+    } else if (chat.type === "group" || chat.type === "supergroup") {
+      targetChatId = chat.id;
+    } else {
+      await ctx.reply("Команда работает в группах и личных сообщениях.");
+      return;
+    }
+
+    try {
+      const activeDebts = await debtTracker.getActiveDebts(targetChatId);
+      if (activeDebts.length === 0) {
+        await ctx.reply("💰 Нет активных долгов в этом чате.");
+        return;
+      }
+
+      const { formatAmount } = await import("./services/debt-tracker");
+      const lines = ["💰 <b>Активные долги:</b>\n"];
+      for (const debt of activeDebts) {
+        lines.push(
+          `• ${debt.debtorUserName || "Unknown"} → ${debt.creditorUserName || "Unknown"}: <b>${formatAmount(debt.amount, debt.currency)}</b>${debt.description ? ` (${debt.description})` : ""}`,
+        );
+      }
+      await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+    } catch (error) {
+      console.error("[debts] Error:", error);
+      await ctx.reply("❌ Ошибка при получении списка долгов.");
+    }
   }),
 );
 
@@ -1008,6 +1052,7 @@ async function registerBotCommands() {
       { command: "search", description: "🔍 Search messages by text" },
       { command: "note", description: "📝 Extract useful note to Notion" },
       { command: "digest", description: "📬 Request digest (sent to DM)" },
+      { command: "debts", description: "💰 Show active debts / who owes whom" },
       {
         command: "connect_account",
         description: "🔐 Connect Telegram account for MTProto (DM only)",

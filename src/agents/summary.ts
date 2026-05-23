@@ -13,9 +13,10 @@ type AnyBot = any;
 interface SummaryAgentOptions {
   chatId: number;
   replyToChatId?: number;
-  messages: Array<{ userId: number; userName: string | null; content: string }>;
+  messages: Array<{ userId: number; userName: string | null; content: string; messageId?: number }>;
   bot: AnyBot;
   placeholderText?: string;
+  debtTracker?: import("../services/debt-tracker").DebtTracker;
 }
 
 const DRAFT_SYSTEM_PROMPT = `Ты — ассистент для анализа групповых чатов. Создай максимально подробное комбинированное саммари.
@@ -41,6 +42,7 @@ const DRAFT_SYSTEM_PROMPT = `Ты — ассистент для анализа �
 - Спойлер: <span class="tg-spoiler">текст</span>
 - НЕ используй markdown (##, **, __, | таблицы) в основном тексте
 - Для таблиц используй инструмент render_table — внутри ячеек markdown разрешён
+- Для долгов и расходов используй инструмент track_debt — сумма в целых единицах (копейки/центы)
 - НЕ придумывай фактов — только из сообщений
 - Если нет информации — напиши "Не обсуждалось"
 - Язык: русский`;
@@ -72,6 +74,71 @@ const SUMMARY_TOOLS: OpenAI.ChatCompletionTool[] = [
           },
         },
         required: ["headers", "rows"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "track_debt",
+      description:
+        "Record a debt/liability from chat messages. Use when someone explicitly states they owe money, paid for someone else, or requests reimbursement. Stores amount in smallest currency unit (integer cents). Normalizes informal currency names (динар→RSD, евро→EUR, доллар→USD, рубль→RUB).",
+      parameters: {
+        type: "object",
+        properties: {
+          creditorName: {
+            type: "string",
+            description: "Name of the person who is owed money (who paid/lent)",
+          },
+          debtorName: {
+            type: "string",
+            description: "Name of the person who owes money (who needs to pay back)",
+          },
+          amount: {
+            type: "integer",
+            description:
+              "Amount in smallest currency unit (e.g. 3500 for 35.00, 150000 for 1500.00 RSD). Must be integer, not float.",
+          },
+          currency: {
+            type: "string",
+            description: "Normalized currency code: RSD, EUR, USD, RUB, CHF, GBP, etc.",
+          },
+          description: {
+            type: "string",
+            description: "What the debt is for (e.g. 'газировка', 'бензин', 'продукты')",
+          },
+          sourceMessageId: {
+            type: "integer",
+            description: "Telegram message ID where this debt was mentioned",
+          },
+        },
+        required: ["creditorName", "debtorName", "amount", "currency", "description"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "settle_debt",
+      description:
+        "Mark a debt as settled/paid. Use when someone explicitly confirms they paid back money.",
+      parameters: {
+        type: "object",
+        properties: {
+          creditorName: {
+            type: "string",
+            description: "Name of the person who was owed money",
+          },
+          debtorName: {
+            type: "string",
+            description: "Name of the person who paid back",
+          },
+          description: {
+            type: "string",
+            description: "What the settled debt was for",
+          },
+        },
+        required: ["creditorName", "debtorName", "description"],
       },
     },
   },
@@ -206,6 +273,69 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
 
     // Render tool calls (structured tables) and append
     const allToolCalls = [...draftResult.toolCalls, ...reviewResult.toolCalls];
+
+    // Process debt tracking tool calls
+    if (options.debtTracker) {
+      const userNameToId = new Map<string, number>();
+      for (const m of options.messages) {
+        if (m.userName) userNameToId.set(m.userName, m.userId);
+      }
+      for (const tc of allToolCalls) {
+        if (tc.name === "track_debt") {
+          try {
+            const args = JSON.parse(tc.arguments) as {
+              creditorName: string;
+              debtorName: string;
+              amount: number;
+              currency: string;
+              description: string;
+              sourceMessageId?: number;
+            };
+            const creditorId = userNameToId.get(args.creditorName) ?? 0;
+            const debtorId = userNameToId.get(args.debtorName) ?? 0;
+            await options.debtTracker.saveDebt({
+              chatId: options.chatId,
+              creditorUserId: creditorId,
+              creditorUserName: args.creditorName,
+              debtorUserId: debtorId,
+              debtorUserName: args.debtorName,
+              amount: args.amount,
+              currency: args.currency.toUpperCase(),
+              description: args.description,
+              sourceMessageIds: args.sourceMessageId
+                ? JSON.stringify([args.sourceMessageId])
+                : null,
+            });
+            console.log(
+              `[debt] tracked: ${args.debtorName} → ${args.creditorName} ${args.amount} ${args.currency} for ${args.description}`,
+            );
+          } catch (e) {
+            console.error("[summary] Failed to track debt:", e);
+          }
+        } else if (tc.name === "settle_debt") {
+          try {
+            const args = JSON.parse(tc.arguments) as {
+              creditorName: string;
+              debtorName: string;
+              description: string;
+            };
+            const creditorId = userNameToId.get(args.creditorName) ?? 0;
+            const debtorId = userNameToId.get(args.debtorName) ?? 0;
+            await options.debtTracker.settleDebt(
+              options.chatId,
+              creditorId,
+              debtorId,
+              args.description,
+            );
+            console.log(
+              `[debt] settled: ${args.debtorName} → ${args.creditorName} for ${args.description}`,
+            );
+          } catch (e) {
+            console.error("[summary] Failed to settle debt:", e);
+          }
+        }
+      }
+    }
     const tableHtmlParts: string[] = [];
     for (const tc of allToolCalls) {
       if (tc.name === "render_table") {
