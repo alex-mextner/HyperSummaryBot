@@ -6,6 +6,14 @@ import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary, type SummaryType } from "./agents/summary";
+import {
+  buildMessageContent,
+  buildForwardFromNameForDb,
+  parseSummaryArgs,
+  parseSearchQuery,
+  parseAskQuestion,
+  formatChatStatsText,
+} from "./bot/message-processor";
 
 const config = loadConfig();
 
@@ -69,9 +77,9 @@ bot.command("summary", async (ctx) => {
     return;
   }
 
-  const args = ctx.text?.split(" ").slice(1) || [];
-  const type = (args[0] as SummaryType) || "general";
-  const count = Math.min(Number.parseInt(args[1] || "50", 10), 200);
+  const args = parseSummaryArgs(ctx.text || "");
+  const type = args.type as SummaryType;
+  const count = args.count;
 
   await ctx.reply(`📊 Генерирую саммари типа "${type}" за последние ${count} сообщений...`);
 
@@ -104,7 +112,7 @@ bot.command("ask", async (ctx) => {
   const chat = ctx.chat;
   if (!chat) return;
 
-  const question = ctx.text?.split(" ").slice(1).join(" ") || "";
+  const question = parseAskQuestion(ctx.text || "");
   if (!question.trim()) {
     await ctx.reply("❓ Задайте вопрос: /ask <ваш вопрос>");
     return;
@@ -148,7 +156,7 @@ bot.command("search", async (ctx) => {
     return;
   }
 
-  const query = ctx.text?.split(" ").slice(1).join(" ") || "";
+  const query = parseSearchQuery(ctx.text || "");
   if (!query.trim()) {
     await ctx.reply("🔍 Введите запрос: /search <текст>");
     return;
@@ -229,7 +237,13 @@ bot.command("connect_account", async (ctx) => {
         const earliest = stats.earliestDate ? stats.earliestDate.toLocaleDateString("ru-RU") : "?";
         const latest = stats.latestDate ? stats.latestDate.toLocaleDateString("ru-RU") : "?";
         const pct = Math.min((stats.total / MAX_CHAT_HISTORY) * 100, 100).toFixed(1);
-        statusText += `• <b>${chatName}</b>: ${stats.total} сообщений (${pct}%)\n  с ${earliest} по ${latest}\n\n`;
+        statusText += formatChatStatsText({
+          chatName,
+          total: stats.total,
+          percentage: pct,
+          earliest,
+          latest,
+        });
       }
     }
   }
@@ -375,13 +389,16 @@ bot.on("message", async (ctx) => {
   // Only process group chats
   if (chat.type !== "group" && chat.type !== "supergroup") return;
 
-  let content = ctx.text || ctx.caption || "";
+  const content = buildMessageContent({
+    text: ctx.text,
+    caption: ctx.caption,
+    voice: !!ctx.voice,
+    forwardOrigin: ctx.forwardOrigin,
+    replyMessage: ctx.replyMessage,
+  });
 
-  // Handle voice messages
+  // Handle voice messages — transcribe asynchronously
   if (ctx.voice) {
-    content = "[Voice message - transcribing...]";
-
-    // Transcribe asynchronously
     (async () => {
       try {
         const fileInfo = await bot.api.getFile({ file_id: ctx.voice!.fileId });
@@ -409,24 +426,6 @@ bot.on("message", async (ctx) => {
     })();
   }
 
-  // Forward enrichment
-  if (ctx.forwardOrigin) {
-    const forwardName =
-      ctx.forwardOrigin.type === "user"
-        ? ctx.forwardOrigin.senderUser?.firstName
-        : ctx.forwardOrigin.type === "chat"
-          ? ctx.forwardOrigin.senderChat?.title
-          : "Forwarded message";
-    content = `Forwarded from ${forwardName}: ${content}`;
-  }
-
-  // Reply enrichment
-  if (ctx.replyMessage) {
-    const replyText = ctx.replyMessage.text || ctx.replyMessage.caption || "";
-    const replyUser = ctx.replyMessage.from?.firstName || "User";
-    content = `Reply to ${replyUser} («${replyText.slice(0, 100)}...»): ${content}`;
-  }
-
   await chatHistory.save({
     chatId: chat.id,
     messageId: ctx.id,
@@ -435,12 +434,7 @@ bot.on("message", async (ctx) => {
     role: "user",
     content,
     replyToMessageId: ctx.replyMessage?.id || null,
-    forwardFromName:
-      ctx.forwardOrigin?.type === "user"
-        ? ctx.forwardOrigin.senderUser?.firstName || null
-        : ctx.forwardOrigin?.type === "chat"
-          ? ctx.forwardOrigin.senderChat?.title || null
-          : null,
+    forwardFromName: buildForwardFromNameForDb(ctx.forwardOrigin),
   });
 
   // Save/update chat title for user-facing display

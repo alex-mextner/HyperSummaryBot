@@ -5,7 +5,8 @@ node_modules/
 # Build outputs
 dist/
 *.exe
-bot
+/bot
+!/src/bot/
 
 # Environment
 .env
