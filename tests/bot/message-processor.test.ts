@@ -37,6 +37,46 @@ describe("buildMessageContent", () => {
     expect(result).toBe("Forwarded from Alice: Check this");
   });
 
+  test("uses 'User' for user forward without name", () => {
+    const result = buildMessageContent({
+      text: "Anon",
+      forwardOrigin: { type: "user" },
+    });
+    expect(result).toBe("Forwarded from User: Anon");
+  });
+
+  test("uses chat title for chat forward", () => {
+    const result = buildMessageContent({
+      text: "Group msg",
+      forwardOrigin: { type: "chat", senderChat: { title: "Dev Chat" } },
+    });
+    expect(result).toBe("Forwarded from Dev Chat: Group msg");
+  });
+
+  test("uses 'Chat' for chat forward without title", () => {
+    const result = buildMessageContent({
+      text: "Untitled",
+      forwardOrigin: { type: "chat" },
+    });
+    expect(result).toBe("Forwarded from Chat: Untitled");
+  });
+
+  test("uses 'Forwarded message' for hidden_user forward", () => {
+    const result = buildMessageContent({
+      text: "Secret",
+      forwardOrigin: { type: "hidden_user" },
+    });
+    expect(result).toBe("Forwarded from Forwarded message: Secret");
+  });
+
+  test("uses 'Forwarded message' for channel forward", () => {
+    const result = buildMessageContent({
+      text: "News",
+      forwardOrigin: { type: "channel", senderChat: { title: "Tech News" } },
+    });
+    expect(result).toBe("Forwarded from Forwarded message: News");
+  });
+
   test("adds reply enrichment", () => {
     const result = buildMessageContent({
       text: "Agreed",
@@ -98,6 +138,22 @@ describe("buildForwardFromNameForDb", () => {
 
   test("returns null for hidden_user forward", () => {
     const result = buildForwardFromNameForDb({ type: "hidden_user" });
+    expect(result).toBeNull();
+  });
+
+  test("returns null for channel forward", () => {
+    const result = buildForwardFromNameForDb({
+      type: "channel",
+      senderChat: { title: "News" },
+    });
+    expect(result).toBeNull();
+  });
+
+  test("returns null for supergroup forward", () => {
+    const result = buildForwardFromNameForDb({
+      type: "supergroup",
+      senderChat: { title: "Group" },
+    });
     expect(result).toBeNull();
   });
 

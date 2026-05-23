@@ -12,8 +12,8 @@ import {
   parseSummaryArgs,
   parseSearchQuery,
   parseAskQuestion,
-  formatChatStatsText,
 } from "./bot/message-processor";
+import { handleConnectAccount } from "./bot/connect-account";
 
 const config = loadConfig();
 
@@ -206,54 +206,10 @@ const pendingAuthCodes = new Map<
 
 // MTProto account connection (DM only)
 bot.command("connect_account", async (ctx) => {
-  const chat = ctx.chat;
-  if (!chat || chat.type !== "private") {
-    await ctx.reply("Эта команда работает только в личных сообщениях со мной.");
-    return;
-  }
-
   const { isMtProtoConfigured } = await import("./services/mtproto");
-
-  if (!(await isMtProtoConfigured())) {
-    await ctx.reply(
-      "⚠️ MTProto не настроен на сервере.\n\n" +
-        "Администратор должен добавить MTPROTO_API_ID и MTPROTO_API_HASH в .env",
-    );
-    return;
-  }
-
-  // Show import status for all chats
-  const allChatIds = await chatHistory.getAllChatIds();
-  let statusText = "📊 <b>Статус импорта истории</b>\n\n";
-
-  if (allChatIds.length === 0) {
-    statusText += "История еще не импортирована ни в один чат.\n\n";
-  } else {
-    for (const chatId of allChatIds.slice(0, 10)) {
-      const stats = await chatHistory.getChatStats(chatId);
-      if (stats.total > 0) {
-        const chatInfo = await chatHistory.getChat(chatId);
-        const chatName = chatInfo?.title || String(chatId);
-        const earliest = stats.earliestDate ? stats.earliestDate.toLocaleDateString("ru-RU") : "?";
-        const latest = stats.latestDate ? stats.latestDate.toLocaleDateString("ru-RU") : "?";
-        const pct = Math.min((stats.total / MAX_CHAT_HISTORY) * 100, 100).toFixed(1);
-        statusText += formatChatStatsText({
-          chatName,
-          total: stats.total,
-          percentage: pct,
-          earliest,
-          latest,
-        });
-      }
-    }
-  }
-
-  statusText +=
-    "🔐 <b>Подключение Telegram аккаунта</b>\n\n" +
-    "Это нужно для импорта истории чатов до момента добавления бота.\n\n" +
-    "Отправьте ваш номер телефона в формате <code>+79123456789</code>:";
-
-  await ctx.reply(statusText, { parse_mode: "HTML" });
+  await handleConnectAccount(ctx, chatHistory, {
+    mtprotoConfigured: await isMtProtoConfigured(),
+  });
 });
 
 // Handle MTProto auth flow in DMs
