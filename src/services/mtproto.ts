@@ -30,8 +30,14 @@ function sleep(ms: number): Promise<void> {
 
 /** Extract FLOOD_WAIT seconds from mtcute RpcError if present. */
 function getFloodWaitSeconds(err: unknown): number | undefined {
-  if (typeof err === "object" && err !== null && "text" in err) {
-    const text = (err as any).text;
+  if (typeof err === "object" && err !== null) {
+    const e = err as any;
+    // mtcute v0.10: text is "FLOOD_WAIT_%d", actual seconds in .seconds
+    if (e.seconds !== undefined && typeof e.seconds === "number") {
+      return e.seconds;
+    }
+    // Fallback: older versions may have FLOOD_WAIT_N in text
+    const text = e.text;
     if (typeof text === "string" && text.startsWith("FLOOD_WAIT_")) {
       const seconds = Number.parseInt(text.replace("FLOOD_WAIT_", ""), 10);
       if (!Number.isNaN(seconds)) return seconds;
@@ -157,8 +163,8 @@ export async function importChatHistory(
 
     if (batchMessages.length < 100) break;
 
-    // Small delay between batches to avoid rate limiting
-    await sleep(500);
+    // Delay between batches to avoid rate limiting
+    await sleep(2000);
   }
 
   // Batch dedup: check which message IDs already exist
