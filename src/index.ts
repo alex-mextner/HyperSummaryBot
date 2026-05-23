@@ -64,6 +64,7 @@ async function runInitialImport(): Promise<void> {
       if (hasAccess) {
         knownGroupIds.add(group.id);
       }
+      await new Promise((r) => setTimeout(r, 1000)); // 1s delay between probes
     }
     console.log(`[startup] Discovered ${knownGroupIds.size} groups with bot`);
 
@@ -398,6 +399,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           importableGroups.push(group);
           knownGroupIds.add(group.id);
         }
+        await new Promise((r) => setTimeout(r, 1000)); // 1s delay between probes
       }
 
       console.log(

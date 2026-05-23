@@ -43,17 +43,17 @@ function getFloodWaitSeconds(err: unknown): number | undefined {
 /** Check if the bot has access to a chat by trying to fetch 1 message.
  * Returns true if the bot is a member (or admin), false otherwise.
  */
-function buildPeer(chatId: number, type: "group" | "channel", accessHash?: string | number): any {
+function buildPeer(chatId: number, type: "group" | "channel", accessHash?: bigint): any {
   if (type === "group") {
     return { _: "inputPeerChat", chatId: chatId };
   }
-  return { _: "inputPeerChannel", channelId: chatId, accessHash: accessHash ?? 0 };
+  return { _: "inputPeerChannel", channelId: chatId, accessHash: accessHash ?? BigInt(0) };
 }
 
 export async function canAccessChat(
   chatId: number,
   type: "group" | "channel",
-  accessHash?: string | number,
+  accessHash?: bigint,
 ): Promise<boolean> {
   try {
     const client = getClient();
@@ -72,6 +72,13 @@ export async function canAccessChat(
     });
     return true;
   } catch (err) {
+    const floodWait = getFloodWaitSeconds(err);
+    if (floodWait !== undefined) {
+      console.warn(`[mtproto] canAccessChat FLOOD_WAIT_${floodWait} for ${chatId}, sleeping...`);
+      await sleep(floodWait * 1000 + 1000);
+      return canAccessChat(chatId, type, accessHash); // retry
+    }
+
     // Bot is not a member, kicked, or chat doesn't exist
     if (
       typeof err === "object" &&
@@ -80,7 +87,8 @@ export async function canAccessChat(
       typeof (err as any).text === "string" &&
       ((err as any).text.includes("CHAT_FORBIDDEN") ||
         (err as any).text.includes("PEER_ID_INVALID") ||
-        (err as any).text.includes("CHANNEL_PRIVATE"))
+        (err as any).text.includes("CHANNEL_PRIVATE") ||
+        (err as any).text.includes("CHANNEL_INVALID"))
     ) {
       return false;
     }
@@ -97,7 +105,7 @@ export async function importChatHistory(
     limit?: number;
     offsetDate?: Date;
     type?: "group" | "channel";
-    accessHash?: string | number;
+    accessHash?: bigint;
   } = {},
 ): Promise<{ imported: number; skipped: number }> {
   const client = getClient();
@@ -190,7 +198,7 @@ export async function importChatHistory(
 }
 
 export async function getUserGroups(): Promise<
-  Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: string | number }>
+  Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: bigint }>
 > {
   const client = getClient();
   await client.start();
@@ -208,7 +216,7 @@ export async function getUserGroups(): Promise<
   const chats = (result as any).chats || [];
   const chatMap = new Map<
     number,
-    { title: string; type: "group" | "channel"; accessHash?: string | number }
+    { title: string; type: "group" | "channel"; accessHash?: bigint }
   >();
 
   for (const chat of chats) {
@@ -231,7 +239,7 @@ export async function getUserGroups(): Promise<
     id: number;
     title: string;
     type: "group" | "channel";
-    accessHash?: string | number;
+    accessHash?: bigint;
   }> = [];
   for (const dialog of dialogs) {
     const peer = dialog.peer;
