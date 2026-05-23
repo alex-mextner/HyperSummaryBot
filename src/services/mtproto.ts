@@ -188,19 +188,14 @@ export async function importChatHistory(
   }
   console.log(`[mtproto] Built ${userNameMap.size} user names from getHistory response`);
 
-  // Import to database (INSERT OR REPLACE handles edits)
+  // Import to database — INSERT new, UPDATE existing with resolved names
   let imported = 0;
+  let updated = 0;
   let skipped = 0;
 
   for (const msg of messages) {
     try {
-      // mtcute returns Long objects for IDs; convert to Number for Drizzle/SQLite
       const messageId = Number(msg.id);
-      if (existingIds.has(messageId)) {
-        skipped++;
-        continue;
-      }
-
       const fromId = msg.fromId;
       const userId = fromId?.userId
         ? Number(fromId.userId)
@@ -209,6 +204,26 @@ export async function importChatHistory(
           : 0;
       const resolvedName = fromId?.userId ? userNameMap.get(Number(fromId.userId)) : null;
       const userName = resolvedName ?? (fromId ? String(fromId.userId || fromId.channelId) : null);
+
+      if (existingIds.has(messageId)) {
+        // Update existing record if we now have a better name
+        if (resolvedName) {
+          await chatHistoryRepo.save({
+            chatId: dbChatId,
+            messageId,
+            userId,
+            userName: resolvedName,
+            role: "user",
+            content: msg.message || "[Media/Empty]",
+            replyToMessageId: msg.replyTo?.replyToMsgId ? Number(msg.replyTo.replyToMsgId) : null,
+            forwardFromName: msg.fwdFrom ? String(msg.fwdFrom.fromId || "Forwarded") : null,
+          });
+          updated++;
+          continue;
+        }
+        skipped++;
+        continue;
+      }
 
       await chatHistoryRepo.save({
         chatId: dbChatId,
@@ -228,7 +243,7 @@ export async function importChatHistory(
   }
 
   console.log(
-    `[mtproto] importChatHistory done: mtprotoChatId=${chatId}, dbChatId=${dbChatId}, totalFetched=${messages.length}, imported=${imported}, skipped=${skipped}, existingInDb=${existingIds.size}`,
+    `[mtproto] importChatHistory done: mtprotoChatId=${chatId}, dbChatId=${dbChatId}, totalFetched=${messages.length}, imported=${imported}, updated=${updated}, skipped=${skipped}, existingInDb=${existingIds.size}`,
   );
   return { imported, skipped };
 }
