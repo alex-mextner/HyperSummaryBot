@@ -153,7 +153,19 @@ bot.command("summary", async (ctx) => {
     });
   } catch (error) {
     console.error("Summary error:", error);
-    await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
+    const errMsg = error instanceof Error ? error.message : "";
+    if (
+      errMsg.includes("401") ||
+      errMsg.includes("token") ||
+      errMsg.includes("All AI providers failed")
+    ) {
+      await ctx.reply(
+        "❌ AI-сервисы временно недоступны (проблема с ключами API).\n" +
+          "Админ уже уведомлён. Попробуй позже.",
+      );
+    } else {
+      await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
+    }
   }
 });
 

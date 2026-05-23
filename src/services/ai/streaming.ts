@@ -37,6 +37,9 @@ function isRetryableError(error: unknown): boolean {
       msg.includes("timeout") ||
       msg.includes("rate limit") ||
       msg.includes("429") ||
+      msg.includes("401") ||
+      msg.includes("token expired") ||
+      msg.includes("incorrect api key") ||
       msg.includes("500") ||
       msg.includes("502") ||
       msg.includes("503") ||
