@@ -24,29 +24,37 @@ export class ChatHistoryRepository {
   }
 
   async save(data: Omit<ChatMessage, "id" | "createdAt">): Promise<number> {
-    const result = await this.db
-      .insert(messages)
-      .values({
-        chatId: data.chatId,
-        messageId: data.messageId,
-        userId: data.userId,
-        userName: data.userName,
-        role: data.role,
-        content: data.content,
-        replyToMessageId: data.replyToMessageId,
-        forwardFromName: data.forwardFromName,
-      })
-      .onConflictDoUpdate({
-        target: [messages.chatId, messages.messageId],
-        set: {
-          content: data.content,
+    try {
+      const result = await this.db
+        .insert(messages)
+        .values({
+          chatId: data.chatId,
+          messageId: data.messageId,
+          userId: data.userId,
           userName: data.userName,
+          role: data.role,
+          content: data.content,
           replyToMessageId: data.replyToMessageId,
           forwardFromName: data.forwardFromName,
-        },
-      })
-      .returning({ id: messages.id });
-    return result[0]?.id ?? -1;
+        })
+        .returning({ id: messages.id });
+      return result[0]?.id ?? -1;
+    } catch (err: any) {
+      // Handle duplicate by updating (edit or re-import)
+      if (err.message?.includes("UNIQUE constraint failed")) {
+        await this.db
+          .update(messages)
+          .set({
+            content: data.content,
+            userName: data.userName,
+            replyToMessageId: data.replyToMessageId,
+            forwardFromName: data.forwardFromName,
+          })
+          .where(and(eq(messages.chatId, data.chatId), eq(messages.messageId, data.messageId)));
+        return -1;
+      }
+      throw err;
+    }
   }
 
   async updateContent(chatId: number, messageId: number, content: string): Promise<void> {
