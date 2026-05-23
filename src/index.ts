@@ -272,14 +272,20 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           pendingAuthCodes.set(userId, { resolve, reject });
         });
       },
-      password: async () => {
-        console.log("[connect_account] prompting for 2fa password");
+      password: async (hint?: string) => {
+        console.log("[connect_account] prompting for 2fa password", { hint });
         passwordAttemptCounts.set(userId, 0);
-        await ctx.reply(
-          "🔒 <b>Включена двухфакторная аутентификация</b>\n\n" +
-            "Введи пароль от своего Telegram-аккаунта:",
-          { parse_mode: "HTML" },
-        );
+
+        let msg =
+          "🔒 <b>Включена двухэтапная аутентификация</b>\n\n" +
+          "Введи <b>облачный пароль</b> (cloud password) от своего Telegram-аккаунта.\n\n" +
+          "<i>Это не SMS-код и не код из приложения — это твой постоянный пароль, который ты задал в Настройках → Конфиденциальность → Двухэтапная аутентификация.</i>";
+
+        if (hint) {
+          msg += `\n\n💡 <b>Подсказка:</b> <i>${hint}</i>`;
+        }
+
+        await ctx.reply(msg, { parse_mode: "HTML" });
 
         return new Promise<string>((resolve, reject) => {
           pendingPasswords.set(userId, { resolve, reject });
@@ -371,7 +377,9 @@ bot.on("message", async (ctx) => {
   if (pendingPass) {
     const password = text.trim();
     if (!password) {
-      await ctx.reply("❌ Пароль не может быть пустым. Введи пароль от своего Telegram-аккаунта:");
+      await ctx.reply(
+        "❌ Облачный пароль не может быть пустым. Введи пароль двухэтапной аутентификации:",
+      );
       return;
     }
 
