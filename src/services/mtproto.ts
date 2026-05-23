@@ -43,11 +43,25 @@ function getFloodWaitSeconds(err: unknown): number | undefined {
 /** Check if the bot has access to a chat by trying to fetch 1 message.
  * Returns true if the bot is a member (or admin), false otherwise.
  */
+/** Resolve a chat peer using getEntity (API-aware, unlike resolvePeer which uses local cache). */
+async function resolveChatPeer(client: any, chatId: number): Promise<any> {
+  const entity = await client.getEntity(chatId);
+  if (!entity) throw new Error(`Entity ${chatId} not found`);
+
+  if (entity._ === "chat" || entity._ === "chatForbidden") {
+    return { _: "inputPeerChat", chat_id: entity.id };
+  }
+  if (entity._ === "channel" || entity._ === "channelForbidden") {
+    return { _: "inputPeerChannel", channel_id: entity.id, access_hash: entity.accessHash ?? 0 };
+  }
+  throw new Error(`Unsupported entity type: ${entity._}`);
+}
+
 export async function canAccessChat(chatId: number): Promise<boolean> {
   try {
     const client = getClient();
     await client.start();
-    const peer = await client.resolvePeer(chatId);
+    const peer = await resolveChatPeer(client, chatId);
     await client.call({
       _: "messages.getHistory",
       peer,
@@ -73,7 +87,7 @@ export async function canAccessChat(chatId: number): Promise<boolean> {
     ) {
       return false;
     }
-    // Other errors (e.g. FLOOD_WAIT) are treated as "can't access" for safety
+    // Peer not found in cache or other error = no access
     console.warn("[mtproto] canAccessChat error for", chatId, ":", err);
     return false;
   }
@@ -89,8 +103,8 @@ export async function importChatHistory(
   // Start client (uses saved session if available)
   await client.start();
 
-  // Resolve peer from chat ID
-  const peer = await client.resolvePeer(chatId);
+  // Resolve peer from chat ID via getEntity (works without local cache)
+  const peer = await resolveChatPeer(client, chatId);
 
   // Fetch messages
   const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
