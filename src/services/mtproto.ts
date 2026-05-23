@@ -95,9 +95,14 @@ export async function importChatHistory(
       channelId: chatId,
       accessHash: options.accessHash,
     } as any;
+    console.log(
+      `[mtproto] importChatHistory using inputPeerChannel channelId=${chatId} accessHash=${options.accessHash}`,
+    );
   } else if (options.type === "group") {
     peer = { _: "inputPeerChat" as const, chatId };
+    console.log(`[mtproto] importChatHistory using inputPeerChat chatId=${chatId}`);
   } else {
+    console.log(`[mtproto] importChatHistory falling back to resolvePeer for chatId=${chatId}`);
     peer = await client.resolvePeer(chatId, true);
   }
 
@@ -284,6 +289,9 @@ export async function getCommonGroups(
       groups.push({ id: chat.id, title: chat.title || "Unknown", type: "group" });
     } else if (chat._ === "channel") {
       const ah = chat.accessHash ?? chat.access_hash;
+      console.log(
+        `[mtproto] getCommonChats channel: id=${chat.id}, title=${chat.title}, ah=${ah}, typeof=${typeof ah}`,
+      );
       groups.push({
         id: chat.id,
         title: chat.title || "Unknown",
