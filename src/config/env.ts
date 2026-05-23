@@ -29,7 +29,6 @@ export interface EnvConfig {
 
   // Notion (optional)
   NOTION_TOKEN?: string;
-  NOTION_DATABASE_ID?: string;
 
   // MTProto (optional — for history import before bot joined)
   MTPROTO_API_ID?: number;
@@ -76,7 +75,6 @@ export function loadConfig(): EnvConfig {
     GROQ_FAST_MODEL: process.env.GROQ_FAST_MODEL,
 
     NOTION_TOKEN: process.env.NOTION_TOKEN,
-    NOTION_DATABASE_ID: process.env.NOTION_DATABASE_ID,
 
     MTPROTO_API_ID: process.env.MTPROTO_API_ID
       ? Number.parseInt(process.env.MTPROTO_API_ID, 10)

@@ -6,6 +6,7 @@ import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary } from "./agents/summary";
+import { extractNote } from "./agents/note-extractor";
 import {
   buildMessageContent,
   buildForwardFromNameForDb,
@@ -276,7 +277,139 @@ bot.command("search", async (ctx) => {
 });
 
 bot.command("note", async (ctx) => {
-  await ctx.reply("📝 Извлечение заметок в разработке. Скоро будет доступно!");
+  const chat = ctx.chat;
+  if (!chat) return;
+
+  const { isNotionConfigured } = await import("./services/notion");
+  if (!isNotionConfigured()) {
+    await ctx.reply(
+      "📝 Notion не настроен.\n\n" + "Администратор должен добавить NOTION_TOKEN в .env",
+    );
+    return;
+  }
+
+  const session = ctx.session as Record<string, unknown>;
+  const notionDbId = session.notionDatabaseId as string | undefined;
+  if (!notionDbId) {
+    await ctx.reply(
+      "📝 Не выбрана база Notion.\n\n" +
+        "Используй /connect_notion, чтобы выбрать или создать базу для заметок.",
+    );
+    return;
+  }
+
+  let targetChatId: number;
+
+  if (chat.type === "private") {
+    const choice = await resolveDMChat(ctx);
+    if (!choice) return;
+    targetChatId = choice.chatId;
+  } else if (chat.type === "group" || chat.type === "supergroup") {
+    targetChatId = chat.id;
+  } else {
+    await ctx.reply("Команда работает в группах и личных сообщениях.");
+    return;
+  }
+
+  await ctx.reply("📝 Анализирую сообщения и извлекаю заметку…");
+
+  try {
+    const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
+
+    if (messages.length === 0) {
+      await ctx.reply("Нет сообщений для анализа.");
+      return;
+    }
+
+    const note = await extractNote(
+      messages.map((m) => ({
+        userId: m.userId,
+        userName: m.userName,
+        content: m.content,
+      })),
+    );
+
+    const { createNotePage } = await import("./services/notion");
+    const result = await createNotePage(notionDbId, {
+      ...note,
+      url:
+        chat.type === "supergroup" || chat.type === "group"
+          ? `https://t.me/c/${String(targetChatId).replace("-100", "")}`
+          : undefined,
+    });
+
+    await ctx.reply(
+      `✅ Заметка сохранена в Notion\n\n` +
+        `<b>${note.title}</b>\n` +
+        `${note.summary.slice(0, 200)}${note.summary.length > 200 ? "…" : ""}\n\n` +
+        `<a href="${result.url}">Открыть в Notion</a>`,
+      { parse_mode: "HTML" },
+    );
+  } catch (error) {
+    console.error("Note extraction error:", error);
+    const errMsg = error instanceof Error ? error.message : "";
+    if (errMsg.includes("Notion API error")) {
+      await ctx.reply(
+        "❌ Ошибка Notion API.\n\n" + "Проверь что интеграция имеет доступ к выбранной базе.",
+      );
+    } else if (errMsg.includes("not configured")) {
+      await ctx.reply("❌ Notion не настроен на сервере.");
+    } else {
+      await ctx.reply("❌ Ошибка при создании заметки. Попробуй позже.");
+    }
+  }
+});
+
+bot.command("connect_notion", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || chat.type !== "private") {
+    await ctx.reply("Эта команда работает только в личных сообщениях.");
+    return;
+  }
+
+  const { isNotionConfigured, searchDatabases } = await import("./services/notion");
+  if (!isNotionConfigured()) {
+    await ctx.reply(
+      "🔌 Notion не настроен на сервере.\n\n" + "Администратор должен добавить NOTION_TOKEN в .env",
+    );
+    return;
+  }
+
+  await ctx.reply("🔍 Ищу доступные базы Notion…");
+
+  try {
+    const databases = await searchDatabases();
+
+    if (databases.length === 0) {
+      await ctx.reply(
+        "📭 Не найдено баз, доступных интеграции.\n\n" +
+          "1. Открой нужную страницу в Notion\n" +
+          "2. Нажми ⋮ → Добавить связи → найди интеграцию бота\n" +
+          "3. Повтори /connect_notion",
+      );
+      return;
+    }
+
+    const buttons = databases.map((db) => ({
+      text: db.title,
+      callback_data: `select_notion_db:${db.id}`,
+    }));
+
+    // Add option to create new database
+    buttons.push({
+      text: "➕ Создать новую базу",
+      callback_data: "create_notion_db_prompt",
+    });
+
+    const keyboard = buttons.map((b) => [b]);
+
+    await ctx.reply("📁 Выбери базу для заметок:", {
+      reply_markup: { inline_keyboard: keyboard },
+    });
+  } catch (error) {
+    console.error("Notion search error:", error);
+    await ctx.reply("❌ Ошибка при поиске баз Notion. Попробуй позже.");
+  }
 });
 
 bot.command("digest", async (ctx) => {
@@ -565,6 +698,38 @@ bot.on("message", async (ctx) => {
     await startMtProtoAuth(ctx, userId, normalizedPhone);
     return;
   }
+
+  // Handle Notion parent page ID input
+  const session = ctx.session as Record<string, unknown>;
+  if (session.awaitingNotionParentPageId) {
+    const pageId = text.trim().replace(/-/g, ""); // Notion IDs can have dashes
+    if (!pageId || pageId.length < 10) {
+      await ctx.reply("❌ Неверный ID страницы. Попробуй ещё раз или отмени командой /cancel.");
+      return;
+    }
+
+    delete session.awaitingNotionParentPageId;
+
+    try {
+      const { createDatabase } = await import("./services/notion");
+      const dbId = await createDatabase(pageId, "HyperSummary Notes");
+      session.notionDatabaseId = dbId;
+      await ctx.reply(
+        `✅ Создана новая база "HyperSummary Notes" в Notion!\n\n` +
+          `Теперь /note будет сохранять заметки сюда.`,
+      );
+    } catch (error) {
+      console.error("[notion] Failed to create database:", error);
+      await ctx.reply(
+        "❌ Не удалось создать базу.\n\n" +
+          "Проверь:\n" +
+          "1. ID страницы скопирован правильно\n" +
+          "2. Интеграция имеет доступ к этой странице (⋮ → Добавить связи)\n" +
+          "3. Повтори /connect_notion и выбери существующую базу",
+      );
+    }
+    return;
+  }
 });
 
 // Auto-import history when bot is added to a group and MTProto is configured
@@ -657,6 +822,39 @@ bot.on("callback_query", async (ctx) => {
 
   await c.answerCallbackQuery("✅ Группа выбрана");
   await c.reply("📌 Группа выбрана. Теперь можешь использовать команды здесь.");
+});
+
+// Handle Notion database selection callbacks
+bot.on("callback_query", async (ctx) => {
+  const c = ctx as any;
+  const data = c.callbackQuery?.data || "";
+
+  if (data.startsWith("select_notion_db:")) {
+    const [, dbId] = data.split(":");
+    if (!dbId) {
+      await c.answerCallbackQuery("❌ Неверные данные");
+      return;
+    }
+
+    const session = c.session as Record<string, unknown>;
+    session.notionDatabaseId = dbId;
+    await c.answerCallbackQuery("✅ База выбрана");
+    await c.reply("📌 База Notion выбрана. Теперь /note будет сохранять заметки сюда.");
+    return;
+  }
+
+  if (data === "create_notion_db_prompt") {
+    const session = c.session as Record<string, unknown>;
+    session.awaitingNotionParentPageId = true;
+    await c.answerCallbackQuery("Введи ID страницы");
+    await c.reply(
+      "📝 Чтобы создать новую базу, мне нужен ID родительской страницы в Notion.\n\n" +
+        "1. Открой страницу в Notion\n" +
+        "2. Скопируй её ID из URL (последняя часть после последнего слеша)\n" +
+        "3. Вставь ID сюда",
+    );
+    return;
+  }
 });
 
 // Handle file uploads for chat dump import

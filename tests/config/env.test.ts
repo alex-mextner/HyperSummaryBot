@@ -41,7 +41,6 @@ describe("loadConfig", () => {
     "MTPROTO_API_ID",
     "MTPROTO_API_HASH",
     "NOTION_TOKEN",
-    "NOTION_DATABASE_ID",
     "BOT_ADMIN_ID",
     "AI_DEBUG_LOGS",
   ];
@@ -129,10 +128,8 @@ describe("loadConfig", () => {
 
   test("sets optional Notion fields", () => {
     process.env.NOTION_TOKEN = "ntoken";
-    process.env.NOTION_DATABASE_ID = "ndb";
     const config = loadConfig();
     expect(config.NOTION_TOKEN).toBe("ntoken");
-    expect(config.NOTION_DATABASE_ID).toBe("ndb");
   });
 
   test("sets optional MTProto fields", () => {
