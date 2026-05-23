@@ -40,6 +40,45 @@ function getFloodWaitSeconds(err: unknown): number | undefined {
   return undefined;
 }
 
+/** Check if the bot has access to a chat by trying to fetch 1 message.
+ * Returns true if the bot is a member (or admin), false otherwise.
+ */
+export async function canAccessChat(chatId: number): Promise<boolean> {
+  try {
+    const client = getClient();
+    await client.start();
+    const peer = await client.resolvePeer(chatId);
+    await client.call({
+      _: "messages.getHistory",
+      peer,
+      limit: 1,
+      offsetId: 0,
+      offsetDate: 0,
+      addOffset: 0,
+      maxId: 0,
+      minId: 0,
+      hash: 0 as any,
+    });
+    return true;
+  } catch (err) {
+    // Bot is not a member, kicked, or chat doesn't exist
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "text" in err &&
+      typeof (err as any).text === "string" &&
+      ((err as any).text.includes("CHAT_FORBIDDEN") ||
+        (err as any).text.includes("PEER_ID_INVALID") ||
+        (err as any).text.includes("CHANNEL_PRIVATE"))
+    ) {
+      return false;
+    }
+    // Other errors (e.g. FLOOD_WAIT) are treated as "can't access" for safety
+    console.warn("[mtproto] canAccessChat error for", chatId, ":", err);
+    return false;
+  }
+}
+
 export async function importChatHistory(
   chatHistoryRepo: ChatHistoryRepository,
   chatId: number,

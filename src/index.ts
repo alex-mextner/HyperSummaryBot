@@ -51,8 +51,24 @@ async function loadKnownGroupIds(): Promise<void> {
 /** One-time import on startup for already-connected MTProto accounts */
 async function runInitialImport(): Promise<void> {
   try {
-    const { getUserGroups, importChatHistory } = await import("./services/mtproto");
+    const { getUserGroups, canAccessChat, importChatHistory } = await import("./services/mtproto");
     const groups = await getUserGroups();
+
+    // If we don't know which groups have the bot, discover them via MTProto
+    if (knownGroupIds.size === 0) {
+      console.log(
+        `[startup] No known groups in DB — probing ${groups.length} user groups for bot membership...`,
+      );
+      for (const group of groups) {
+        const hasAccess = await canAccessChat(group.id);
+        console.log(`[startup] canAccessChat(${group.title}): ${hasAccess}`);
+        if (hasAccess) {
+          knownGroupIds.add(group.id);
+        }
+      }
+      console.log(`[startup] Discovered ${knownGroupIds.size} groups with bot`);
+    }
+
     const importableGroups = groups.filter((g) => isGroupKnown(g.id, g.type));
     console.log(
       `[startup] ${groups.length} user groups total, ${importableGroups.length} importable (bot is present)`,
@@ -364,53 +380,67 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     connectAttempts.delete(userId);
     await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
 
-    // Auto-import history from all user groups
+    // Auto-import history from user groups where the bot is present
     console.log("[connect_account] fetching user groups...");
-    const { getUserGroups, importChatHistory } = await import("./services/mtproto");
+    const { getUserGroups, canAccessChat, importChatHistory } = await import("./services/mtproto");
     const groups = await getUserGroups();
     console.log("[connect_account] user groups count:", groups.length);
 
     if (groups.length === 0) {
       await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
     } else {
-      const importableGroups =
-        knownGroupIds.size > 0 ? groups.filter((g) => isGroupKnown(g.id, g.type)) : groups; // fallback: import all if we don't know which groups have the bot yet
+      // Probe each group: is the bot a member?
+      const importableGroups: typeof groups = [];
+      for (const group of groups) {
+        const hasAccess = await canAccessChat(group.id);
+        console.log(`[connect_account] canAccessChat(${group.title}): ${hasAccess}`);
+        if (hasAccess) {
+          importableGroups.push(group);
+          knownGroupIds.add(group.id);
+        }
+      }
 
       console.log(
         "[connect_account] importable groups:",
         importableGroups.length,
         "/",
         groups.length,
-        knownGroupIds.size > 0 ? "(filtered)" : "(fallback — all)",
       );
 
-      await ctx.reply(`📥 Найдено ${importableGroups.length} групп. Начинаю импорт истории...`);
+      if (importableGroups.length === 0) {
+        await ctx.reply(
+          `📭 Вижу ${groups.length} групп, но меня в них пока не добавили.\n\n` +
+            "Добавь меня в нужные группы, и я начну собирать историю автоматически.",
+        );
+      } else {
+        await ctx.reply(
+          `📥 Найдено ${importableGroups.length} групп, где я есть. Начинаю импорт истории...`,
+        );
 
-      let importedCount = 0;
-      let skippedCount = 0;
+        let importedCount = 0;
 
-      // Sequential import with delay between groups to avoid FLOOD_WAIT
-      for (const group of importableGroups) {
-        try {
-          const result = await importChatHistory(chatHistory, group.id, {
-            limit: MAX_CHAT_HISTORY,
-          });
-          importedCount += result.imported;
-          console.log(
-            `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
-          );
-        } catch (err) {
-          skippedCount++;
-          console.error(`Failed to import ${group.title}:`, err);
+        // Sequential import with delay between groups to avoid FLOOD_WAIT
+        for (const group of importableGroups) {
+          try {
+            const result = await importChatHistory(chatHistory, group.id, {
+              limit: MAX_CHAT_HISTORY,
+            });
+            importedCount += result.imported;
+            console.log(
+              `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
+            );
+          } catch (err) {
+            console.error(`Failed to import ${group.title}:`, err);
+          }
+          // 2-second delay between groups to respect Telegram rate limits
+          await new Promise((r) => setTimeout(r, 2000));
         }
-        // 2-second delay between groups to respect Telegram rate limits
-        await new Promise((r) => setTimeout(r, 2000));
-      }
 
-      await ctx.reply(
-        `🚀 Импорт завершён: ${importedCount} сообщений из ${importableGroups.length - skippedCount} групп.\n\n` +
-          "История будет доступна для /summary и /search.",
-      );
+        await ctx.reply(
+          `🚀 Импорт завершён: ${importedCount} сообщений из ${importableGroups.length} групп.\n\n` +
+            "История будет доступна для /summary и /search.",
+        );
+      }
     }
   } catch (error) {
     pendingAuthCodes.delete(userId);
