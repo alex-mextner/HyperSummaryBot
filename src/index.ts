@@ -206,10 +206,15 @@ const pendingAuthCodes = new Map<
 
 // MTProto account connection (DM only)
 bot.command("connect_account", async (ctx) => {
-  const { isMtProtoConfigured } = await import("./services/mtproto");
-  await handleConnectAccount(ctx, chatHistory, {
-    mtprotoConfigured: await isMtProtoConfigured(),
-  });
+  try {
+    const { isMtProtoConfigured } = await import("./services/mtproto");
+    await handleConnectAccount(ctx, chatHistory, {
+      mtprotoConfigured: await isMtProtoConfigured(),
+    });
+  } catch (error) {
+    console.error("Connect account command error:", error);
+    await ctx.reply("❌ Ошибка при обработке команды. Попробуйте позже.");
+  }
 });
 
 // Handle MTProto auth flow in DMs
