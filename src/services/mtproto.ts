@@ -59,15 +59,12 @@ export async function canAccessChat(
 ): Promise<boolean> {
   const botApiChatId = type === "channel" ? -1000000000000 - chatId : -chatId;
   try {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember`, {
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/getChat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: botApiChatId, user_id: "me" }),
+      body: JSON.stringify({ chat_id: botApiChatId }),
     });
-    if (!response.ok) return false;
-    const data = (await response.json()) as { result?: { status: string } };
-    const status = data.result?.status;
-    return status === "member" || status === "administrator";
+    return response.ok;
   } catch {
     return false;
   }
