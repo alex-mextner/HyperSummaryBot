@@ -13,7 +13,7 @@ describe("buildConnectAccountStatus", () => {
     expect(text).toContain("MTProto не настроен");
   });
 
-  test("returns empty-history text when no chats", async () => {
+  test("skips status section when no chats", async () => {
     const db = initDatabase(":memory:");
     createTestSchema(db);
     const repo = new ChatHistoryRepository(db);
@@ -23,9 +23,9 @@ describe("buildConnectAccountStatus", () => {
       chatHistory: repo,
     });
 
-    expect(text).toContain("Статус импорта истории");
-    expect(text).toContain("История еще не импортирована");
+    expect(text).not.toContain("Статус импорта истории");
     expect(text).toContain("Подключение Telegram аккаунта");
+    expect(text).toContain("Отправьте ваш номер телефона");
     db.close();
   });
 
@@ -86,7 +86,7 @@ describe("handleConnectAccount", () => {
     expect(replies[0]).toContain("MTProto не настроен");
   });
 
-  test("replies with status when everything ok", async () => {
+  test("replies with connection prompt when no history", async () => {
     const db = initDatabase(":memory:");
     createTestSchema(db);
     const repo = new ChatHistoryRepository(db);
@@ -101,7 +101,8 @@ describe("handleConnectAccount", () => {
 
     await handleConnectAccount(ctx as any, repo, { mtprotoConfigured: true });
     expect(replies).toHaveLength(1);
-    expect(replies[0]).toContain("Статус импорта истории");
+    expect(replies[0]).toContain("Подключение Telegram аккаунта");
+    expect(replies[0]).not.toContain("Статус импорта истории");
     db.close();
   });
 

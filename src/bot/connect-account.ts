@@ -25,11 +25,11 @@ export async function buildConnectAccountStatus(options: {
 
   const allChatIds = await options.chatHistory.getAllChatIds();
   console.log("[connect_account] getAllChatIds returned", { count: allChatIds.length });
-  let statusText = "📊 <b>Статус импорта истории</b>\n\n";
 
-  if (allChatIds.length === 0) {
-    statusText += "История еще не импортирована ни в один чат.\n\n";
-  } else {
+  let statusText = "";
+
+  if (allChatIds.length > 0) {
+    statusText += "📊 <b>Статус импорта истории</b>\n\n";
     for (const chatId of allChatIds.slice(0, 10)) {
       const stats = await options.chatHistory.getChatStats(chatId);
       if (stats.total > 0) {
@@ -47,6 +47,7 @@ export async function buildConnectAccountStatus(options: {
         });
       }
     }
+    statusText += "\n";
   }
 
   statusText +=
@@ -81,7 +82,14 @@ export async function handleConnectAccount(
     });
 
     console.log("[connect_account] replying with status text length:", statusText.length);
-    await ctx.reply(statusText, { parse_mode: "HTML" });
+    await ctx.reply(statusText, {
+      parse_mode: "HTML",
+      reply_markup: {
+        keyboard: [[{ text: "📱 Поделиться номером", request_contact: true }]],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
+    });
   } catch (error) {
     console.error("[connect_account] ERROR in handleConnectAccount:", error);
     await ctx.reply("❌ Что-то пошло не так. Попробуйте позже или используйте /help.");

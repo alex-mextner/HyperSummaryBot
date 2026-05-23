@@ -204,6 +204,78 @@ const pendingAuthCodes = new Map<
   { resolve: (code: string) => void; reject: (err: Error) => void }
 >();
 
+async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promise<void> {
+  try {
+    console.log("[connect_account] importing TelegramClient...");
+    const { TelegramClient } = await import("@mtcute/bun");
+    console.log("[connect_account] TelegramClient imported, creating client...");
+    const client = new TelegramClient({
+      apiId: config.MTPROTO_API_ID!,
+      apiHash: config.MTPROTO_API_HASH!,
+      storage: "data/mtcute-session",
+    });
+    console.log("[connect_account] client created, calling start...");
+
+    // Start auth and wait for code
+    await client.start({
+      phone,
+      code: async () => {
+        console.log("[connect_account] prompting for auth code");
+        await ctx.reply(
+          "🔑 <b>Код отправлен в Telegram</b>\n\n" +
+            "Введите код из сообщения от Telegram (без дефисов):",
+          { parse_mode: "HTML" },
+        );
+
+        return new Promise<string>((resolve, reject) => {
+          pendingAuthCodes.set(userId, { resolve, reject });
+        });
+      },
+    });
+
+    console.log("[connect_account] client.start completed successfully");
+    await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
+
+    // Auto-import history from all user groups
+    console.log("[connect_account] fetching user groups...");
+    const { getUserGroups, importChatHistory } = await import("./services/mtproto");
+    const groups = await getUserGroups();
+    console.log("[connect_account] user groups count:", groups.length);
+
+    if (groups.length === 0) {
+      await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
+    } else {
+      await ctx.reply(`📥 Найдено ${groups.length} групп. Начинаю импорт истории в фоне...`);
+
+      for (const group of groups) {
+        (async () => {
+          try {
+            const result = await importChatHistory(chatHistory, group.id, {
+              limit: MAX_CHAT_HISTORY,
+            });
+            console.log(
+              `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
+            );
+          } catch (err) {
+            console.error(`Failed to import ${group.title}:`, err);
+          }
+        })();
+      }
+
+      await ctx.reply(
+        `🚀 Импорт запущен для ${groups.length} групп.\n\n` +
+          "История будет доступна для /summary и /search.",
+      );
+    }
+  } catch (error) {
+    pendingAuthCodes.delete(userId);
+    console.error("[connect_account] MTProto auth error:", error);
+    await ctx.reply(
+      `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
+  }
+}
+
 // MTProto account connection (DM only)
 bot.command("connect_account", async (ctx) => {
   console.log("[connect_account] command handler triggered", {
@@ -243,82 +315,27 @@ bot.on("message", async (ctx) => {
     return;
   }
 
+  // Handle shared contact (phone number button)
+  const contactPhone = ctx.contact?.phoneNumber;
+  if (contactPhone) {
+    console.log("[connect_account] contact received", { userId, contactPhone });
+    const phone = contactPhone.startsWith("+") ? contactPhone : `+${contactPhone}`;
+    await ctx.reply(`📱 Получен номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...", {
+      reply_markup: { remove_keyboard: true },
+    });
+    await startMtProtoAuth(ctx, userId, phone);
+    return;
+  }
+
   // Handle phone number input for MTProto auth
   if (/^\+\d{10,15}$/.test(text.trim())) {
     const phone = text.trim();
     console.log("[connect_account] phone number received", { userId, phone });
 
-    await ctx.reply(`📱 Номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...");
-
-    try {
-      console.log("[connect_account] importing TelegramClient...");
-      const { TelegramClient } = await import("@mtcute/bun");
-      console.log("[connect_account] TelegramClient imported, creating client...");
-      const client = new TelegramClient({
-        apiId: config.MTPROTO_API_ID!,
-        apiHash: config.MTPROTO_API_HASH!,
-        storage: "data/mtcute-session",
-      });
-      console.log("[connect_account] client created, calling start...");
-
-      // Start auth and wait for code
-      await client.start({
-        phone,
-        code: async () => {
-          console.log("[connect_account] prompting for auth code");
-          await ctx.reply(
-            "🔑 <b>Код отправлен в Telegram</b>\n\n" +
-              "Введите код из сообщения от Telegram (без дефисов):",
-            { parse_mode: "HTML" },
-          );
-
-          return new Promise<string>((resolve, reject) => {
-            pendingAuthCodes.set(userId, { resolve, reject });
-          });
-        },
-      });
-
-      console.log("[connect_account] client.start completed successfully");
-      await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
-
-      // Auto-import history from all user groups
-      console.log("[connect_account] fetching user groups...");
-      const { getUserGroups, importChatHistory } = await import("./services/mtproto");
-      const groups = await getUserGroups();
-      console.log("[connect_account] user groups count:", groups.length);
-
-      if (groups.length === 0) {
-        await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
-      } else {
-        await ctx.reply(`📥 Найдено ${groups.length} групп. Начинаю импорт истории в фоне...`);
-
-        for (const group of groups) {
-          (async () => {
-            try {
-              const result = await importChatHistory(chatHistory, group.id, {
-                limit: MAX_CHAT_HISTORY,
-              });
-              console.log(
-                `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
-              );
-            } catch (err) {
-              console.error(`Failed to import ${group.title}:`, err);
-            }
-          })();
-        }
-
-        await ctx.reply(
-          `🚀 Импорт запущен для ${groups.length} групп.\n\n` +
-            "История будет доступна для /summary и /search.",
-        );
-      }
-    } catch (error) {
-      pendingAuthCodes.delete(userId);
-      console.error("[connect_account] MTProto auth error:", error);
-      await ctx.reply(
-        `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
-    }
+    await ctx.reply(`📱 Номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...", {
+      reply_markup: { remove_keyboard: true },
+    });
+    await startMtProtoAuth(ctx, userId, phone);
     return;
   }
 });
