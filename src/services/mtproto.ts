@@ -73,15 +73,33 @@ export async function canAccessChat(
 export async function importChatHistory(
   chatHistoryRepo: ChatHistoryRepository,
   chatId: number,
-  options: { limit?: number; offsetDate?: Date; type?: "group" | "channel" } = {},
+  options: {
+    limit?: number;
+    offsetDate?: Date;
+    type?: "group" | "channel";
+    accessHash?: bigint;
+  } = {},
 ): Promise<{ imported: number; skipped: number }> {
   const client = getClient();
 
   // Start client (uses saved session if available)
   await client.start();
 
-  // Resolve peer from chat ID (force=true to bypass local cache and hit API)
-  const peer = await client.resolvePeer(chatId, true);
+  // Build peer directly from known type + access_hash (avoids resolvePeer cache issues).
+  // Fallback to resolvePeer if accessHash not provided (e.g. my_chat_member events).
+  let peer;
+  if (options.type === "channel" && options.accessHash && options.accessHash !== BigInt(0)) {
+    // mtcute runtime accepts bigint for Long fields; cast to suppress TS strictness
+    peer = {
+      _: "inputPeerChannel" as const,
+      channelId: chatId,
+      accessHash: options.accessHash,
+    } as any;
+  } else if (options.type === "group") {
+    peer = { _: "inputPeerChat" as const, chatId };
+  } else {
+    peer = await client.resolvePeer(chatId, true);
+  }
 
   // Fetch messages
   const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
@@ -222,7 +240,7 @@ export async function getUserGroups(): Promise<
  */
 export async function getCommonGroups(
   botUsername: string,
-): Promise<Array<{ id: number; title: string; type: "group" | "channel" }>> {
+): Promise<Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: bigint }>> {
   const client = getClient();
   await client.start();
 
@@ -254,13 +272,24 @@ export async function getCommonGroups(
   });
 
   const chats = (result as any).chats || [];
-  const groups: Array<{ id: number; title: string; type: "group" | "channel" }> = [];
+  const groups: Array<{
+    id: number;
+    title: string;
+    type: "group" | "channel";
+    accessHash?: bigint;
+  }> = [];
 
   for (const chat of chats) {
     if (chat._ === "chat") {
       groups.push({ id: chat.id, title: chat.title || "Unknown", type: "group" });
     } else if (chat._ === "channel") {
-      groups.push({ id: chat.id, title: chat.title || "Unknown", type: "channel" });
+      const ah = chat.accessHash ?? chat.access_hash;
+      groups.push({
+        id: chat.id,
+        title: chat.title || "Unknown",
+        type: "channel",
+        accessHash: typeof ah === "bigint" ? ah : ah !== undefined ? BigInt(ah) : undefined,
+      });
     }
   }
 

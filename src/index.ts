@@ -61,6 +61,7 @@ async function runInitialImport(): Promise<void> {
         const result = await importChatHistory(chatHistory, group.id, {
           limit: MAX_CHAT_HISTORY,
           type: group.type,
+          accessHash: group.accessHash,
         });
         console.log(
           `[startup] Imported ${result.imported} messages from ${group.title} (${group.id})`,
@@ -384,6 +385,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           const result = await importChatHistory(chatHistory, group.id, {
             limit: MAX_CHAT_HISTORY,
             type: group.type,
+            accessHash: group.accessHash,
           });
           importedCount += result.imported;
           console.log(
