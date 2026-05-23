@@ -1,5 +1,7 @@
 /** Message sending safety utilities — HTML sanitization, tag closing, chunking, rate limiting. */
 
+import { markdownTableToHtml } from "./table-renderer";
+
 // Telegram message limit (keeping 96 chars buffer for safety)
 export const TG_MSG_LIMIT = 4000;
 
@@ -176,6 +178,9 @@ export function markdownToHtml(text: string): string {
 
   // Escape raw HTML first (but preserve our own tags)
   html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // Tables — markdown tables don't contain < > so they survive escaping intact
+  html = markdownTableToHtml(html);
 
   // Code blocks
   html = html.replace(/```([\s\S]*?)```/g, "<pre>$1</pre>");
