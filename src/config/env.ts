@@ -38,8 +38,13 @@ export interface EnvConfig {
   BOT_ADMIN_ID?: number;
   AI_DEBUG_LOGS: boolean;
 
+  // Webhook (optional — alternative to polling)
+  WEBHOOK_URL?: string;
+  WEBHOOK_SECRET?: string;
+
   // Test API (protected endpoint for debugging)
   TEST_API_PASSWORD?: string;
+  TEST_API_PORT: number;
 }
 
 export function requireEnv(name: string): string {
@@ -85,6 +90,13 @@ export function loadConfig(): EnvConfig {
       ? Number.parseInt(process.env.BOT_ADMIN_ID, 10)
       : undefined,
     AI_DEBUG_LOGS: process.env.AI_DEBUG_LOGS === "true",
+
+    WEBHOOK_URL: process.env.WEBHOOK_URL,
+    WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+
     TEST_API_PASSWORD: process.env.TEST_API_PASSWORD,
+    TEST_API_PORT: process.env.TEST_API_PORT
+      ? Number.parseInt(process.env.TEST_API_PORT, 10)
+      : 3001,
   };
 }

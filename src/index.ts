@@ -952,6 +952,10 @@ async function registerBotCommands() {
         command: "connect_account",
         description: "🔐 Connect Telegram account for MTProto (DM only)",
       },
+      {
+        command: "connect_notion",
+        description: "🔗 Connect Notion database for notes (DM only)",
+      },
     ],
   });
   console.log("✅ Bot commands registered");
@@ -965,12 +969,18 @@ async function main() {
   await loadKnownGroupIds();
   await registerBotCommands();
 
-  // Start HTTP test server (if TEST_API_PASSWORD is set)
-  try {
-    const { startTestServer } = await import("./test-server");
-    startTestServer();
-  } catch (err) {
-    console.warn("[test-api] Failed to start test server:", err);
+  // Start HTTP server: webhook receiver (prod) or test API (dev)
+  if (config.WEBHOOK_URL) {
+    const { startWebhookServer } = await import("./webhook-server");
+    startWebhookServer(bot);
+  } else {
+    // Polling mode: start test server on separate port
+    try {
+      const { startTestServer } = await import("./test-server");
+      startTestServer();
+    } catch (err) {
+      console.warn("[test-api] Failed to start test server:", err);
+    }
   }
 
   // MTProto real-time sync disabled at startup to avoid crash loop
@@ -990,11 +1000,18 @@ async function main() {
     runInitialImport();
   }
 
-  if (config.NODE_ENV === "development") {
-    // Use polling for local dev
-    await bot.start();
+  if (config.WEBHOOK_URL) {
+    // Production with webhook
+    console.log(`🔌 Starting webhook mode on ${config.WEBHOOK_URL}`);
+    await bot.start({
+      webhook: {
+        url: config.WEBHOOK_URL,
+        ...(config.WEBHOOK_SECRET ? { secret_token: config.WEBHOOK_SECRET } : {}),
+      },
+    });
   } else {
-    // Production: use polling until webhook server is configured
+    // Polling mode (dev or prod without webhook)
+    console.log("📡 Starting polling mode");
     await bot.start();
   }
 }
