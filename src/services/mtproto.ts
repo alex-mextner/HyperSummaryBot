@@ -80,8 +80,8 @@ export async function importChatHistory(
   // Start client (uses saved session if available)
   await client.start();
 
-  // Resolve peer from chat ID (uses local cache, should work if bot was in chat)
-  const peer = await client.resolvePeer(chatId);
+  // Resolve peer from chat ID (force=true to bypass local cache and hit API)
+  const peer = await client.resolvePeer(chatId, true);
 
   // Fetch messages
   const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
