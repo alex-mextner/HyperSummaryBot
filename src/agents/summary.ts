@@ -116,12 +116,19 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
       `[summary] Draft phase complete — ${draft.length} chars, ${Date.now() - draftStart}ms`,
     );
 
-    // Phase 2: Review and refine (silent)
+    // Phase 2: Review and refine (silent) — capped at 60s to avoid hanging on slow providers
     writer.appendText("\n\n[проверка фактов…]");
     const reviewStart = Date.now();
     let final: string;
     try {
-      final = await reviewAndRefine(draft, formattedMessages);
+      const reviewPromise = reviewAndRefine(draft, formattedMessages);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const id = setTimeout(() => {
+          clearTimeout(id);
+          reject(new Error("Review phase timed out after 60s"));
+        }, 60_000);
+      });
+      final = await Promise.race([reviewPromise, timeoutPromise]);
       console.log(
         `[summary] Review phase complete — ${final.length} chars, ${Date.now() - reviewStart}ms`,
       );
