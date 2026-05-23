@@ -112,6 +112,7 @@ export async function importChatHistory(
   // Fetch messages
   const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
   const messages: any[] = [];
+  const userMap = new Map<number, { username?: string; firstName?: string; lastName?: string }>();
   let offsetId = 0;
 
   while (messages.length < limit) {
@@ -139,15 +140,24 @@ export async function importChatHistory(
     }
 
     const batchMessages = (batch as any).messages || [];
+    const batchUsers = (batch as any).users || [];
     console.log(
-      `[mtproto] getHistory returned ${batchMessages.length} messages for chat ${chatId}`,
+      `[mtproto] getHistory returned ${batchMessages.length} messages, ${batchUsers.length} users for chat ${chatId}`,
     );
     if (batchMessages.length === 0) break;
 
+    // Collect user info from the response
+    for (const u of batchUsers) {
+      if (u._ === "user" && u.id) {
+        userMap.set(Number(u.id), {
+          username: u.username,
+          firstName: u.firstName,
+          lastName: u.lastName,
+        });
+      }
+    }
+
     for (const msg of batchMessages) {
-      console.log(
-        `[mtproto] msg._=${msg._}, id=${msg.id}, fromId=${JSON.stringify(msg.fromId)}, message=${msg.message?.slice(0, 50)}`,
-      );
       if (msg._ === "message") {
         messages.push(msg);
         offsetId = msg.id;
@@ -166,56 +176,17 @@ export async function importChatHistory(
     messages.map((m) => Number(m.id)),
   );
 
-  // Build user ID → { accessHash, name } from message senders
-  const senderMap = new Map<number, { accessHash: bigint | undefined; tempName: string }>();
-  for (const msg of messages) {
-    const uid = msg.fromId?.userId ? Number(msg.fromId.userId) : null;
-    if (!uid || uid <= 0) continue;
-    if (senderMap.has(uid)) continue;
-
-    const ah = msg.fromId?.accessHash ?? msg.fromId?.access_hash;
-    console.log(
-      `[mtproto] fromId debug: uid=${uid}, accessHash=${ah}, typeof=${typeof ah}, keys=${Object.keys(msg.fromId || {}).join(",")}`,
-    );
-    const tempName = msg.fromId ? String(msg.fromId.userId || msg.fromId.channelId) : "Unknown";
-    senderMap.set(uid, {
-      accessHash: typeof ah === "bigint" ? ah : ah !== undefined ? BigInt(ah) : undefined,
-      tempName,
-    });
-  }
-
+  // Build user ID → name from userMap collected during getHistory
   const userNameMap = new Map<number, string>();
-  if (senderMap.size > 0) {
-    try {
-      const inputUsers: any[] = [];
-      for (const [uid, info] of senderMap) {
-        if (info.accessHash && info.accessHash !== BigInt(0)) {
-          inputUsers.push({ _: "inputUser", userId: uid, accessHash: info.accessHash });
-        }
-      }
-
-      if (inputUsers.length > 0) {
-        const usersResult = await client.call({
-          _: "users.getUsers",
-          id: inputUsers,
-        });
-        const users = (usersResult as any).users || [];
-        for (const u of users) {
-          if (u._ === "user") {
-            const name = u.username
-              ? `@${u.username}`
-              : u.firstName
-                ? `${u.firstName}${u.lastName ? ` ${u.lastName}` : ""}`
-                : String(u.id);
-            userNameMap.set(Number(u.id), name);
-          }
-        }
-      }
-      console.log(`[mtproto] Resolved ${userNameMap.size}/${senderMap.size} user names`);
-    } catch (e) {
-      console.warn("[mtproto] Failed to resolve user names:", e);
-    }
+  for (const [uid, info] of userMap) {
+    const name = info.username
+      ? `@${info.username}`
+      : info.firstName
+        ? `${info.firstName}${info.lastName ? ` ${info.lastName}` : ""}`
+        : null;
+    if (name) userNameMap.set(uid, name);
   }
+  console.log(`[mtproto] Built ${userNameMap.size} user names from getHistory response`);
 
   // Import to database (INSERT OR REPLACE handles edits)
   let imported = 0;
