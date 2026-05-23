@@ -14,6 +14,7 @@ import {
   parseAskQuestion,
 } from "./bot/message-processor";
 import { handleConnectAccount } from "./bot/connect-account";
+import { resolveDMChat, toBotApiChatId } from "./bot/dm-chat-resolver";
 
 const config = loadConfig();
 
@@ -23,12 +24,6 @@ const chatHistory = new ChatHistoryRepository(db);
 
 // Track chats where the bot is actually present — used to filter MTProto import
 const knownGroupIds = new Set<number>();
-
-/** Convert MTProto peer ID to Bot API chat ID. */
-function toBotApiChatId(mtprotoId: number, type: "group" | "channel"): number {
-  if (type === "channel") return -1000000000000 - mtprotoId; // -100<channelId>
-  return -mtprotoId; // regular group
-}
 
 /** Check if a group (by MTProto id + type) is known to the bot. */
 function isGroupKnown(mtprotoId: number, type: "group" | "channel"): boolean {
@@ -127,8 +122,18 @@ bot.command("help", async (ctx) => {
 
 bot.command("summary", async (ctx) => {
   const chat = ctx.chat;
-  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
-    await ctx.reply("Эта команда работает только в группах.");
+  if (!chat) return;
+
+  let targetChatId: number;
+
+  if (chat.type === "private") {
+    const choice = await resolveDMChat(ctx);
+    if (!choice) return;
+    targetChatId = choice.chatId;
+  } else if (chat.type === "group" || chat.type === "supergroup") {
+    targetChatId = chat.id;
+  } else {
+    await ctx.reply("Команда работает в группах и личных сообщениях.");
     return;
   }
 
@@ -139,7 +144,7 @@ bot.command("summary", async (ctx) => {
   await ctx.reply(`📊 Генерирую саммари типа "${type}" за последние ${count} сообщений...`);
 
   try {
-    const messages = await ctx.chatHistory.getRecent(chat.id, count);
+    const messages = await ctx.chatHistory.getRecent(targetChatId, count);
 
     if (messages.length === 0) {
       await ctx.reply("Нет сообщений для анализа.");
@@ -152,7 +157,7 @@ bot.command("summary", async (ctx) => {
     }));
 
     await generateSummary({
-      chatId: chat.id,
+      chatId: targetChatId,
       messages: formattedMessages,
       type,
       bot,
@@ -169,17 +174,35 @@ bot.command("ask", async (ctx) => {
 
   const question = parseAskQuestion(ctx.text || "");
   if (!question.trim()) {
-    await ctx.reply("❓ Задайте вопрос: /ask <ваш вопрос>");
+    await ctx.reply("❓ Задай вопрос: /ask <твой вопрос>");
     return;
   }
 
   const userId = ctx.from?.id;
   if (!userId) return;
 
+  let targetChatId: number;
+
+  if (chat.type === "private") {
+    const choice = await resolveDMChat(ctx);
+    if (!choice) return;
+    targetChatId = choice.chatId;
+  } else if (chat.type === "group" || chat.type === "supergroup") {
+    targetChatId = chat.id;
+  } else {
+    await ctx.reply("Команда работает в группах и личных сообщениях.");
+    return;
+  }
+
   await ctx.reply("🤔 Анализирую вопрос...");
 
   try {
-    const messages = await ctx.chatHistory.getRecent(chat.id, 100);
+    const messages = await ctx.chatHistory.getRecent(targetChatId, 100);
+
+    if (messages.length === 0) {
+      await ctx.reply("Нет сообщений для анализа.");
+      return;
+    }
 
     try {
       await bot.api.sendMessage({
@@ -188,14 +211,14 @@ bot.command("ask", async (ctx) => {
         parse_mode: "HTML",
       });
     } catch {
-      await ctx.reply("Откройте ЛС со мной, чтобы получить ответ.");
+      await ctx.reply("Открой ЛС со мной, чтобы получить ответ.");
       return;
     }
 
     // TODO: Implement QA agent with streaming
     await bot.api.sendMessage({
       chat_id: userId,
-      text: `📋 <b>Ответ на ваш вопрос:</b>\n\n${question}\n\n(Агент в разработке)`,
+      text: `📋 <b>Ответ:</b>\n\n${question}\n\n(Агент в разработке)`,
       parse_mode: "HTML",
     });
   } catch (error) {
@@ -206,21 +229,31 @@ bot.command("ask", async (ctx) => {
 
 bot.command("search", async (ctx) => {
   const chat = ctx.chat;
-  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
-    await ctx.reply("Эта команда работает только в группах.");
+  if (!chat) return;
+
+  let targetChatId: number;
+
+  if (chat.type === "private") {
+    const choice = await resolveDMChat(ctx);
+    if (!choice) return;
+    targetChatId = choice.chatId;
+  } else if (chat.type === "group" || chat.type === "supergroup") {
+    targetChatId = chat.id;
+  } else {
+    await ctx.reply("Команда работает в группах и личных сообщениях.");
     return;
   }
 
   const query = parseSearchQuery(ctx.text || "");
   if (!query.trim()) {
-    await ctx.reply("🔍 Введите запрос: /search <текст>");
+    await ctx.reply("🔍 Введи запрос: /search <текст>");
     return;
   }
 
   await ctx.reply(`🔍 Ищу: "${query}"...`);
 
   try {
-    const messages = await ctx.chatHistory.getRecent(chat.id, 99999);
+    const messages = await ctx.chatHistory.getRecent(targetChatId, 99999);
     const results = messages.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()));
 
     if (results.length === 0) {
@@ -578,6 +611,39 @@ bot.on("my_chat_member", async (ctx) => {
     console.log("[my_chat_member] bot removed from group", { chatId: chat.id });
     knownGroupIds.delete(chat.id);
   }
+});
+
+// Handle inline keyboard group selection in DM
+bot.on("callback_query", async (ctx) => {
+  const c = ctx as any;
+  const data = c.callbackQuery?.data || "";
+  if (!data.startsWith("select_chat:")) return;
+
+  const [, rawId, type] = data.split(":");
+  const mtprotoId = Number(rawId);
+  if (!mtprotoId || !type) {
+    await c.answerCallbackQuery("❌ Неверные данные");
+    return;
+  }
+
+  const chatId = toBotApiChatId(mtprotoId, type as "group" | "channel");
+  const session = c.session as Record<string, unknown>;
+  session.selectedChatId = chatId;
+
+  // Fetch title from MTProto common groups to cache it in session
+  try {
+    const { getCommonGroups } = await import("./services/mtproto");
+    const groups = await getCommonGroups(config.BOT_USERNAME);
+    const group = groups.find((g: any) => g.id === mtprotoId);
+    if (group) {
+      session.selectedChatTitle = group.title;
+    }
+  } catch {
+    // ignore
+  }
+
+  await c.answerCallbackQuery("✅ Группа выбрана");
+  await c.reply("📌 Группа выбрана. Теперь можешь использовать команды здесь.");
 });
 
 // Handle file uploads for chat dump import

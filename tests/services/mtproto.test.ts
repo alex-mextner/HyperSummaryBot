@@ -95,7 +95,7 @@ describe("MTProto service", () => {
 
   test("importChatHistory dedups existing messages", async () => {
     await repo.save({
-      chatId: 1,
+      chatId: -1,
       messageId: 100,
       userId: 1,
       userName: "User",
@@ -179,13 +179,13 @@ describe("MTProto service", () => {
       },
     });
 
-    const recent = await repo.getRecent(1, 10);
+    const recent = await repo.getRecent(-1, 10);
     expect(recent.some((m) => m.messageId === 999)).toBe(true);
   });
 
   test("update handler dedups existing messages", async () => {
     await repo.save({
-      chatId: 1,
+      chatId: -1,
       messageId: 999,
       userId: 1,
       userName: "User",
@@ -211,7 +211,7 @@ describe("MTProto service", () => {
       },
     });
 
-    const recent = await repo.getRecent(1, 10);
+    const recent = await repo.getRecent(-1, 10);
     expect(recent).toHaveLength(1);
     expect(recent[0]!.content).toBe("Already here");
   });

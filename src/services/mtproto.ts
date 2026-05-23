@@ -85,6 +85,9 @@ export async function importChatHistory(
   // Start client (uses saved session if available)
   await client.start();
 
+  // Normalize chatId to Bot API format so DB queries work consistently
+  const dbChatId = options.type === "channel" ? -1000000000000 - chatId : -chatId;
+
   // Build peer directly from known type + access_hash (avoids resolvePeer cache issues).
   // Fallback to resolvePeer if accessHash not provided (e.g. my_chat_member events).
   let peer;
@@ -159,7 +162,7 @@ export async function importChatHistory(
 
   // Batch dedup: check which message IDs already exist (convert Long objects to Number)
   const existingIds = await chatHistoryRepo.checkExistsBatch(
-    chatId,
+    dbChatId,
     messages.map((m) => Number(m.id)),
   );
 
@@ -185,7 +188,7 @@ export async function importChatHistory(
       const userName = fromId ? String(fromId.userId || fromId.channelId) : null;
 
       await chatHistoryRepo.save({
-        chatId,
+        chatId: dbChatId,
         messageId,
         userId,
         userName,
@@ -202,7 +205,7 @@ export async function importChatHistory(
   }
 
   console.log(
-    `[mtproto] importChatHistory done: chatId=${chatId}, totalFetched=${messages.length}, imported=${imported}, skipped=${skipped}, existingInDb=${existingIds.size}`,
+    `[mtproto] importChatHistory done: mtprotoChatId=${chatId}, dbChatId=${dbChatId}, totalFetched=${messages.length}, imported=${imported}, skipped=${skipped}, existingInDb=${existingIds.size}`,
   );
   return { imported, skipped };
 }
@@ -340,13 +343,15 @@ export async function startRealtimeSync(
     if (!msg || msg._ !== "message") return;
 
     const peerId = msg.peerId as Record<string, unknown> | undefined;
-    const chatId = (peerId?.channelId ?? peerId?.chatId ?? peerId?.userId) as number | undefined;
-    if (!chatId) return;
+    const rawChatId = (peerId?.channelId ?? peerId?.chatId ?? peerId?.userId) as number | undefined;
+    if (!rawChatId) return;
 
+    const isChannel = peerId?.channelId !== undefined;
+    const dbChatId = isChannel ? -1000000000000 - Number(rawChatId) : -Number(rawChatId);
     const msgId = msg.id as number;
 
     // Check if already exists (fast dedup)
-    const exists = await chatHistoryRepo.checkExists(chatId, msgId);
+    const exists = await chatHistoryRepo.checkExists(dbChatId, msgId);
     if (exists) return;
 
     const fromId = msg.fromId as Record<string, unknown> | undefined;
@@ -355,7 +360,7 @@ export async function startRealtimeSync(
 
     // Save new message
     await chatHistoryRepo.save({
-      chatId,
+      chatId: dbChatId,
       messageId: msgId,
       userId: (fromId?.userId ?? fromId?.channelId ?? 0) as number,
       userName: fromId ? String(fromId.userId || fromId.channelId) : null,
@@ -365,7 +370,7 @@ export async function startRealtimeSync(
       forwardFromName: fwdFrom ? String(fwdFrom.fromId || "Forwarded") : null,
     });
 
-    console.log(`[MTProto] Synced message ${msgId} from chat ${chatId}`);
+    console.log(`[MTProto] Synced message ${msgId} from chat ${rawChatId} (dbChatId=${dbChatId})`);
   };
 
   // mtcute uses event emitter pattern for updates
