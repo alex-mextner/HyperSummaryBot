@@ -204,11 +204,19 @@ const pendingAuthCodes = new Map<
   { resolve: (code: string) => void; reject: (err: Error) => void }
 >();
 
+// In-memory store for pending 2FA password promises
+const pendingPasswords = new Map<
+  number,
+  { resolve: (password: string) => void; reject: (err: Error) => void }
+>();
+
 // Cooldown and attempt tracking per user
 const CONNECT_COOLDOWN_MS = 60_000;
 const MAX_CODE_ATTEMPTS = 3;
+const MAX_PASSWORD_ATTEMPTS = 3;
 const connectAttempts = new Map<number, number>();
 const codeAttemptCounts = new Map<number, number>();
+const passwordAttemptCounts = new Map<number, number>();
 
 function isConnectCooldownActive(userId: number): boolean {
   const last = connectAttempts.get(userId);
@@ -249,7 +257,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     });
     console.log("[connect_account] client created, calling start...");
 
-    // Start auth and wait for code
+    // Start auth and wait for code / password
     await client.start({
       phone,
       code: async () => {
@@ -264,10 +272,24 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           pendingAuthCodes.set(userId, { resolve, reject });
         });
       },
+      password: async () => {
+        console.log("[connect_account] prompting for 2fa password");
+        passwordAttemptCounts.set(userId, 0);
+        await ctx.reply(
+          "🔒 <b>Включена двухфакторная аутентификация</b>\n\n" +
+            "Введи пароль от своего Telegram-аккаунта:",
+          { parse_mode: "HTML" },
+        );
+
+        return new Promise<string>((resolve, reject) => {
+          pendingPasswords.set(userId, { resolve, reject });
+        });
+      },
     });
 
     console.log("[connect_account] client.start completed successfully");
     codeAttemptCounts.delete(userId);
+    passwordAttemptCounts.delete(userId);
     connectAttempts.delete(userId);
     await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
 
@@ -304,7 +326,9 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     }
   } catch (error) {
     pendingAuthCodes.delete(userId);
+    pendingPasswords.delete(userId);
     codeAttemptCounts.delete(userId);
+    passwordAttemptCounts.delete(userId);
     console.error("[connect_account] MTProto auth error:", error);
     await ctx.reply(
       `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -341,6 +365,31 @@ bot.on("message", async (ctx) => {
   const text = ctx.text || "";
   const userId = ctx.from?.id;
   if (!userId) return;
+
+  // Check if user has a pending 2FA password promise
+  const pendingPass = pendingPasswords.get(userId);
+  if (pendingPass) {
+    const password = text.trim();
+    if (!password) {
+      await ctx.reply("❌ Пароль не может быть пустым. Введи пароль от своего Telegram-аккаунта:");
+      return;
+    }
+
+    const attempts = (passwordAttemptCounts.get(userId) ?? 0) + 1;
+    passwordAttemptCounts.set(userId, attempts);
+
+    if (attempts > MAX_PASSWORD_ATTEMPTS) {
+      pendingPasswords.delete(userId);
+      passwordAttemptCounts.delete(userId);
+      pendingPass.reject(new Error("Too many password attempts"));
+      await ctx.reply("❌ Слишком много попыток. Начни заново: /connect_account");
+      return;
+    }
+
+    pendingPass.resolve(password);
+    pendingPasswords.delete(userId);
+    return;
+  }
 
   // Check if user has a pending code promise
   const pendingAuth = pendingAuthCodes.get(userId);
