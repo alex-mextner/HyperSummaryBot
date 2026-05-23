@@ -10,6 +10,7 @@ type AnyBot = any;
 
 interface SummaryAgentOptions {
   chatId: number;
+  replyToChatId?: number;
   messages: Array<{ userId: number; userName: string | null; content: string }>;
   bot: AnyBot;
   placeholderText?: string;
@@ -97,7 +98,11 @@ async function reviewAndRefine(draft: string, formattedMessages: string): Promis
 }
 
 export async function generateSummary(options: SummaryAgentOptions): Promise<string> {
-  const writer = new TelegramStreamWriter(options.bot, options.chatId, options.placeholderText);
+  const writer = new TelegramStreamWriter(
+    options.bot,
+    options.replyToChatId ?? options.chatId,
+    options.placeholderText,
+  );
 
   const { text: formattedMessages, lookup } = formatMessagesForPrompt(options.messages);
 

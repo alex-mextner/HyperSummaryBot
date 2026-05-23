@@ -169,6 +169,7 @@ bot.command(
 
       await generateSummary({
         chatId: targetChatId,
+        replyToChatId: chat.type === "private" ? chat.id : targetChatId,
         messages: messages.map((m) => ({
           userId: m.userId,
           userName: m.userName,
