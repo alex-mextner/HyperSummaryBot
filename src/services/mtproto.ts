@@ -165,7 +165,7 @@ export async function importChatHistory(
 }
 
 export async function getUserGroups(): Promise<
-  Array<{ id: number; title: string; type: "group" | "channel"; accessHash?: bigint }>
+  Array<{ id: number; title: string; type: "group" | "channel" }>
 > {
   const client = getClient();
   await client.start();
@@ -211,6 +211,56 @@ export async function getUserGroups(): Promise<
       if (info) {
         groups.push({ id: chatId, title: info.title, type: info.type });
       }
+    }
+  }
+
+  return groups;
+}
+
+/** Get groups where both the user AND the bot are members.
+ * Uses MTProto messages.getCommonChats — same as "Common Groups" in Telegram app.
+ */
+export async function getCommonGroups(
+  botUsername: string,
+): Promise<Array<{ id: number; title: string; type: "group" | "channel" }>> {
+  const client = getClient();
+  await client.start();
+
+  // Resolve bot username to get user_id + access_hash
+  const resolved = await client.call({
+    _: "contacts.resolveUsername",
+    username: botUsername,
+  });
+
+  const users = (resolved as any).users || [];
+  const botUser = users.find((u: any) => u._ === "user" && u.bot);
+  if (!botUser) {
+    console.warn("[mtproto] Could not resolve bot username:", botUsername);
+    return [];
+  }
+
+  const inputUser = {
+    _: "inputUser" as const,
+    userId: botUser.id,
+    accessHash: botUser.access_hash,
+  };
+
+  // Get common chats (groups where both user and bot are members)
+  const result = await client.call({
+    _: "messages.getCommonChats" as const,
+    userId: inputUser,
+    limit: 100,
+    maxId: 0,
+  });
+
+  const chats = (result as any).chats || [];
+  const groups: Array<{ id: number; title: string; type: "group" | "channel" }> = [];
+
+  for (const chat of chats) {
+    if (chat._ === "chat") {
+      groups.push({ id: chat.id, title: chat.title || "Unknown", type: "group" });
+    } else if (chat._ === "channel") {
+      groups.push({ id: chat.id, title: chat.title || "Unknown", type: "channel" });
     }
   }
 
