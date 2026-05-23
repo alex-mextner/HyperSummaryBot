@@ -41,13 +41,13 @@ describe("generateSummary", () => {
     });
 
     expect(result).toBe("Mock response");
-    expect(callCount).toBe(1); // single-phase
+    expect(callCount).toBe(2); // draft + review
     expect(capturedParams).not.toBeNull();
-    expect(capturedParams.messages).toHaveLength(2); // system + user
+    expect(capturedParams.messages).toHaveLength(4); // system + user + assistant draft + review prompt
     expect(capturedParams.messages[0].role).toBe("system");
     expect(capturedParams.messages[0].content).toContain("саммари");
     expect(capturedParams.max_tokens).toBe(4096);
-    expect(capturedParams.temperature).toBe(0.3);
+    expect(capturedParams.temperature).toBe(0.2);
   });
 
   test("includes formatted messages with user lookup", async () => {

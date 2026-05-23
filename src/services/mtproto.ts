@@ -176,14 +176,21 @@ export async function importChatHistory(
     messages.map((m) => Number(m.id)),
   );
 
-  // Build user ID → name from userMap collected during getHistory
+  // Build user ID → display name from userMap collected during getHistory
+  // Format: "Имя @ник" when both available, "@ник" when only username, "Имя" when only name
   const userNameMap = new Map<number, string>();
   for (const [uid, info] of userMap) {
-    const name = info.username
-      ? `@${info.username}`
-      : info.firstName
-        ? `${info.firstName}${info.lastName ? ` ${info.lastName}` : ""}`
-        : null;
+    let name: string | null = null;
+    const displayName = info.firstName
+      ? `${info.firstName}${info.lastName ? ` ${info.lastName}` : ""}`
+      : null;
+    if (displayName && info.username) {
+      name = `${displayName} @${info.username}`;
+    } else if (info.username) {
+      name = `@${info.username}`;
+    } else if (displayName) {
+      name = displayName;
+    }
     if (name) userNameMap.set(uid, name);
   }
   console.log(`[mtproto] Built ${userNameMap.size} user names from getHistory response`);

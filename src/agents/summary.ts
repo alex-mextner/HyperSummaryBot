@@ -14,7 +14,7 @@ interface SummaryAgentOptions {
   bot: AnyBot;
 }
 
-const SUMMARY_SYSTEM_PROMPT = `Ты — ассистент для анализа групповых чатов. Создай максимально подробное комбинированное саммари.
+const DRAFT_SYSTEM_PROMPT = `Ты — ассистент для анализа групповых чатов. Создай максимально подробное комбинированное саммари.
 
 ИМЕНА:
 - Используй ТОЛЬКО имена из сообщений. НИКОГДА не пиши "участник", "пользователь", "user", "человек"
@@ -35,11 +35,64 @@ const SUMMARY_SYSTEM_PROMPT = `Ты — ассистент для анализа
 - Цитата: <blockquote>текст</blockquote>
 - Код: <code>текст</code>
 - Спойлер: <span class="tg-spoiler">текст</span>
-- НЕ используй markdown (** *, __, ~~, #, 
-- НЕ используй таблицы markdown — для action items используй обычный список
+- НЕ используй markdown
 - НЕ придумывай фактов — только из сообщений
 - Если нет информации — напиши "Не обсуждалось"
 - Язык: русский`;
+
+const REVIEW_SYSTEM_PROMPT = `Ты — редактор саммари. Проверь черновик и выдай финальную версию.
+
+ПРОВЕРЬ:
+1. Есть ли расплывчатые формулировки ("указанном месте", "начинают", "обсуждали")?
+   Замени на конкретных людей, факты, цифры, ссылки.
+2. Есть ли противоречия в сообщениях? (один сказал X, другой — не-X)
+   Отрази обе точки зрения или уточни, что решение не принято.
+3. Все ли факты подтверждены цитатами? Убери додуманное.
+4. Каждый факт приписан конкретному человеку по имени?
+5. Нет ли markdown (#, **, __)? Замени на HTML теги.
+
+Выдай ТОЛЬКО финальный текст. Не пиши "Исправлено:" или комментарии.`;
+
+async function generateDraft(
+  formattedMessages: string,
+  callbacks: { onTextDelta?: (text: string) => void },
+): Promise<string> {
+  const result = await aiStreamRound(
+    {
+      messages: [
+        { role: "system", content: DRAFT_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
+        },
+      ],
+      maxTokens: 4096,
+      temperature: 0.3,
+    },
+    callbacks,
+  );
+  return result.text;
+}
+
+async function reviewAndRefine(draft: string, formattedMessages: string): Promise<string> {
+  const result = await aiStreamRound(
+    {
+      messages: [
+        { role: "system", content: DRAFT_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
+        },
+        { role: "assistant", content: draft },
+        { role: "user", content: REVIEW_SYSTEM_PROMPT },
+      ],
+      maxTokens: 4096,
+      temperature: 0.2,
+    },
+    {},
+  );
+  return result.text;
+}
 
 export async function generateSummary(options: SummaryAgentOptions): Promise<string> {
   const writer = new TelegramStreamWriter(options.bot, options.chatId);
@@ -47,27 +100,25 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
   const { text: formattedMessages, lookup } = formatMessagesForPrompt(options.messages);
 
   try {
-    // Single-phase: generate and stream directly
-    const result = await aiStreamRound(
-      {
-        messages: [
-          { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Проанализируй сообщения и создай подробное комбинированное саммари.\n\n${formattedMessages}`,
-          },
-        ],
-        maxTokens: 4096,
-        temperature: 0.3,
-      },
-      {
-        onTextDelta: (text) => writer.appendText(text),
-      },
-    );
+    // Phase 1: Draft with streaming (user sees live text)
+    const draft = await generateDraft(formattedMessages, {
+      onTextDelta: (text) => writer.appendText(text),
+    });
 
-    let final = sanitizeAttributions(result.text, lookup);
+    // Phase 2: Review and refine (silent)
+    writer.appendText("\n\n[проверка фактов…]");
+    let final: string;
+    try {
+      final = await reviewAndRefine(draft, formattedMessages);
+    } catch (reviewError) {
+      console.warn("[summary] Review phase failed, falling back to draft:", reviewError);
+      final = draft;
+    }
 
-    // Post-process: if raw IDs still present, do a quick replacement
+    // Post-process: clean up attributions
+    final = sanitizeAttributions(final, lookup);
+
+    // Safety: force-replace any remaining raw IDs
     const knownIds = Array.from(lookup.names.keys());
     if (containsRawUserIds(final, knownIds)) {
       console.warn("[summary] Raw IDs in output, forcing replacement");
@@ -76,7 +127,7 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
       }
     }
 
-    // Replace streamed text with cleaned version for final HTML rendering
+    // Replace streamed draft with refined final version
     writer.replaceText(final);
 
     await writer.finalize();
