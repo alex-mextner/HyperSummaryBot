@@ -157,10 +157,10 @@ export async function importChatHistory(
     await sleep(2000);
   }
 
-  // Batch dedup: check which message IDs already exist
+  // Batch dedup: check which message IDs already exist (convert Long objects to Number)
   const existingIds = await chatHistoryRepo.checkExistsBatch(
     chatId,
-    messages.map((m) => m.id),
+    messages.map((m) => Number(m.id)),
   );
 
   // Import to database (INSERT OR REPLACE handles edits)
@@ -169,23 +169,34 @@ export async function importChatHistory(
 
   for (const msg of messages) {
     try {
-      if (existingIds.has(msg.id)) {
+      // mtcute returns Long objects for IDs; convert to Number for Drizzle/SQLite
+      const messageId = Number(msg.id);
+      if (existingIds.has(messageId)) {
         skipped++;
         continue;
       }
 
+      const fromId = msg.fromId;
+      const userId = fromId?.userId
+        ? Number(fromId.userId)
+        : fromId?.channelId
+          ? Number(fromId.channelId)
+          : 0;
+      const userName = fromId ? String(fromId.userId || fromId.channelId) : null;
+
       await chatHistoryRepo.save({
         chatId,
-        messageId: msg.id,
-        userId: msg.fromId?.userId ?? msg.fromId?.channelId ?? 0,
-        userName: msg.fromId ? String(msg.fromId.userId || msg.fromId.channelId) : null,
+        messageId,
+        userId,
+        userName,
         role: "user",
         content: msg.message || "[Media/Empty]",
-        replyToMessageId: msg.replyTo?.replyToMsgId || null,
+        replyToMessageId: msg.replyTo?.replyToMsgId ? Number(msg.replyTo.replyToMsgId) : null,
         forwardFromName: msg.fwdFrom ? String(msg.fwdFrom.fromId || "Forwarded") : null,
       });
       imported++;
-    } catch {
+    } catch (err) {
+      console.error(`[mtproto] Failed to save message ${msg.id}:`, err);
       skipped++;
     }
   }
