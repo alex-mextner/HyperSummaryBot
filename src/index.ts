@@ -54,17 +54,15 @@ async function runInitialImport(): Promise<void> {
     const { getUserGroups, canAccessChat, importChatHistory } = await import("./services/mtproto");
     const groups = await getUserGroups();
 
-    // Discover which groups the bot can actually access
-    console.log(
-      `[startup] No known groups in DB — probing ${groups.length} user groups for bot membership...`,
-    );
+    // Discover which groups have the bot via Bot API (not MTProto user session)
+    console.log(`[startup] Probing ${groups.length} user groups for bot membership via Bot API...`);
     for (const group of groups) {
-      const hasAccess = await canAccessChat(group.id, group.type, group.accessHash);
+      const hasAccess = await canAccessChat(group.id, group.type, config.BOT_TOKEN);
       console.log(`[startup] canAccessChat(${group.title}): ${hasAccess}`);
       if (hasAccess) {
         knownGroupIds.add(group.id);
       }
-      await new Promise((r) => setTimeout(r, 1000)); // 1s delay between probes
+      await new Promise((r) => setTimeout(r, 500)); // 500ms delay between probes
     }
     console.log(`[startup] Discovered ${knownGroupIds.size} groups with bot`);
 
@@ -78,7 +76,6 @@ async function runInitialImport(): Promise<void> {
         const result = await importChatHistory(chatHistory, group.id, {
           limit: MAX_CHAT_HISTORY,
           type: group.type,
-          accessHash: group.accessHash,
         });
         console.log(
           `[startup] Imported ${result.imported} messages from ${group.title} (${group.id})`,
@@ -393,13 +390,13 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
       // Probe each group: is the bot a member?
       const importableGroups: typeof groups = [];
       for (const group of groups) {
-        const hasAccess = await canAccessChat(group.id, group.type, group.accessHash);
+        const hasAccess = await canAccessChat(group.id, group.type, config.BOT_TOKEN);
         console.log(`[connect_account] canAccessChat(${group.title}): ${hasAccess}`);
         if (hasAccess) {
           importableGroups.push(group);
           knownGroupIds.add(group.id);
         }
-        await new Promise((r) => setTimeout(r, 1000)); // 1s delay between probes
+        await new Promise((r) => setTimeout(r, 500)); // 500ms delay between probes
       }
 
       console.log(
@@ -427,7 +424,6 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
             const result = await importChatHistory(chatHistory, group.id, {
               limit: MAX_CHAT_HISTORY,
               type: group.type,
-              accessHash: group.accessHash,
             });
             importedCount += result.imported;
             console.log(

@@ -49,57 +49,26 @@ function getFloodWaitSeconds(err: unknown): number | undefined {
 /** Check if the bot has access to a chat by trying to fetch 1 message.
  * Returns true if the bot is a member (or admin), false otherwise.
  */
-function buildPeer(chatId: number, type: "group" | "channel", accessHash?: bigint): any {
-  if (type === "group") {
-    return { _: "inputPeerChat", chatId: chatId };
-  }
-  return { _: "inputPeerChannel", channelId: chatId, accessHash: accessHash ?? BigInt(0) };
-}
-
+/** Check if the bot is a member of a chat via Bot API getChatMember.
+ * Uses the bot's own token, not the user's MTProto session.
+ */
 export async function canAccessChat(
   chatId: number,
   type: "group" | "channel",
-  accessHash?: bigint,
+  botToken: string,
 ): Promise<boolean> {
+  const botApiChatId = type === "channel" ? -1000000000000 - chatId : -chatId;
   try {
-    const client = getClient();
-    await client.start();
-    const peer = buildPeer(chatId, type, accessHash);
-    await client.call({
-      _: "messages.getHistory",
-      peer,
-      limit: 1,
-      offsetId: 0,
-      offsetDate: 0,
-      addOffset: 0,
-      maxId: 0,
-      minId: 0,
-      hash: 0 as any,
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: botApiChatId, user_id: "me" }),
     });
-    return true;
-  } catch (err) {
-    const floodWait = getFloodWaitSeconds(err);
-    if (floodWait !== undefined) {
-      console.warn(`[mtproto] canAccessChat FLOOD_WAIT_${floodWait} for ${chatId}, sleeping...`);
-      await sleep(floodWait * 1000 + 1000);
-      return canAccessChat(chatId, type, accessHash); // retry
-    }
-
-    // Bot is not a member, kicked, or chat doesn't exist
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "text" in err &&
-      typeof (err as any).text === "string" &&
-      ((err as any).text.includes("CHAT_FORBIDDEN") ||
-        (err as any).text.includes("PEER_ID_INVALID") ||
-        (err as any).text.includes("CHANNEL_PRIVATE") ||
-        (err as any).text.includes("CHANNEL_INVALID"))
-    ) {
-      return false;
-    }
-    // Peer not found in cache or other error = no access
-    console.warn("[mtproto] canAccessChat error for", chatId, ":", err);
+    if (!response.ok) return false;
+    const data = (await response.json()) as { result?: { status: string } };
+    const status = data.result?.status;
+    return status === "member" || status === "administrator";
+  } catch {
     return false;
   }
 }
@@ -107,20 +76,15 @@ export async function canAccessChat(
 export async function importChatHistory(
   chatHistoryRepo: ChatHistoryRepository,
   chatId: number,
-  options: {
-    limit?: number;
-    offsetDate?: Date;
-    type?: "group" | "channel";
-    accessHash?: bigint;
-  } = {},
+  options: { limit?: number; offsetDate?: Date; type?: "group" | "channel" } = {},
 ): Promise<{ imported: number; skipped: number }> {
   const client = getClient();
 
   // Start client (uses saved session if available)
   await client.start();
 
-  // Build peer directly from known type/access_hash (avoids resolvePeer cache issues)
-  const peer = buildPeer(chatId, options.type ?? "group", options.accessHash);
+  // Resolve peer from chat ID (uses local cache, should work if bot was in chat)
+  const peer = await client.resolvePeer(chatId);
 
   // Fetch messages
   const limit = Math.min(options.limit ?? MAX_CHAT_HISTORY, MAX_CHAT_HISTORY);
@@ -220,24 +184,13 @@ export async function getUserGroups(): Promise<
 
   const dialogs = (result as any).dialogs || [];
   const chats = (result as any).chats || [];
-  const chatMap = new Map<
-    number,
-    { title: string; type: "group" | "channel"; accessHash?: bigint }
-  >();
+  const chatMap = new Map<number, { title: string; type: "group" | "channel" }>();
 
   for (const chat of chats) {
     if (chat._ === "chat") {
       chatMap.set(chat.id, { title: chat.title || "Unknown", type: "group" });
     } else if (chat._ === "channel") {
-      const rawAccessHash = chat.accessHash ?? chat.access_hash;
-      console.log(
-        `[mtproto] getUserGroups chat ${chat.id} (${chat.title}) access_hash type=${typeof rawAccessHash} value=${rawAccessHash}`,
-      );
-      chatMap.set(chat.id, {
-        title: chat.title || "Unknown",
-        type: "channel",
-        accessHash: rawAccessHash,
-      });
+      chatMap.set(chat.id, { title: chat.title || "Unknown", type: "channel" });
     }
   }
 
@@ -245,7 +198,6 @@ export async function getUserGroups(): Promise<
     id: number;
     title: string;
     type: "group" | "channel";
-    accessHash?: bigint;
   }> = [];
   for (const dialog of dialogs) {
     const peer = dialog.peer;
@@ -260,12 +212,7 @@ export async function getUserGroups(): Promise<
     if (chatId) {
       const info = chatMap.get(chatId);
       if (info) {
-        groups.push({
-          id: chatId,
-          title: info.title,
-          type: info.type,
-          accessHash: info.accessHash,
-        });
+        groups.push({ id: chatId, title: info.title, type: info.type });
       }
     }
   }
