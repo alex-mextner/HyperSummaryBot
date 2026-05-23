@@ -101,19 +101,35 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
 
   const { text: formattedMessages, lookup } = formatMessagesForPrompt(options.messages);
 
+  const totalStart = Date.now();
+  console.log(
+    `[summary] Starting generation — ${options.messages.length} messages for chat ${options.chatId}`,
+  );
+
   try {
     // Phase 1: Draft with streaming (user sees live text)
+    const draftStart = Date.now();
     const draft = await generateDraft(formattedMessages, {
       onTextDelta: (text) => writer.appendText(text),
     });
+    console.log(
+      `[summary] Draft phase complete — ${draft.length} chars, ${Date.now() - draftStart}ms`,
+    );
 
     // Phase 2: Review and refine (silent)
     writer.appendText("\n\n[проверка фактов…]");
+    const reviewStart = Date.now();
     let final: string;
     try {
       final = await reviewAndRefine(draft, formattedMessages);
+      console.log(
+        `[summary] Review phase complete — ${final.length} chars, ${Date.now() - reviewStart}ms`,
+      );
     } catch (reviewError) {
-      console.warn("[summary] Review phase failed, falling back to draft:", reviewError);
+      console.warn(
+        `[summary] Review phase failed after ${Date.now() - reviewStart}ms, falling back to draft:`,
+        reviewError,
+      );
       final = draft;
     }
 
@@ -133,8 +149,10 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
     writer.replaceText(final);
 
     await writer.finalize();
+    console.log(`[summary] Done — total ${Date.now() - totalStart}ms, final ${final.length} chars`);
     return final;
   } catch (error) {
+    console.error(`[summary] FAILED after ${Date.now() - totalStart}ms:`, error);
     await writer.deleteMessage();
     throw error;
   }

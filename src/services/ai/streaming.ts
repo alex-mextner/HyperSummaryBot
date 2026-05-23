@@ -98,20 +98,35 @@ export async function aiStreamRound(
     onToolCallResult: callbacks.onToolCallResult,
   };
 
+  console.log(
+    `[ai] Round start — chain=${chain.map((s) => s.name).join(", ")}, messages=${options.messages.length}, max_tokens=${options.maxTokens}`,
+  );
   for (const slot of chain) {
     try {
       const result = await streamFromProvider(slot, options, wrappedCallbacks, fullText, toolCalls);
+      console.log(`[ai] Round complete via ${slot.name} — ${result.text.length} chars`);
       return result;
     } catch (error) {
-      if (textEmitted) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      const status = (error as any)?.status ?? "no-status";
+      if (textEmitted) {
+        console.error(
+          `[ai] ${slot.name} FAILED after text already emitted — aborting round. status=${status}, error=${msg}`,
+        );
+        throw error;
+      }
       if (isRetryableError(error)) {
-        console.warn(`Provider ${slot.name} failed, trying next...`, error);
+        console.warn(
+          `[ai] ${slot.name} FAILED (retryable) — status=${status}, error=${msg}. Trying next...`,
+        );
         continue;
       }
+      console.error(`[ai] ${slot.name} FAILED (non-retryable) — status=${status}, error=${msg}`);
       throw error;
     }
   }
 
+  console.error(`[ai] All ${chain.length} providers failed`);
   throw new Error("All AI providers failed");
 }
 
@@ -123,19 +138,37 @@ async function streamFromProvider(
   toolCalls: Array<{ name: string; arguments: string; id: string }>,
 ): Promise<StreamRoundResult> {
   const client = slot.client();
-  const stream = await client.chat.completions.create(
-    {
-      model: slot.model,
-      messages: options.messages,
-      tools: options.tools,
-      max_tokens: options.maxTokens,
-      temperature: options.temperature ?? 0.7,
-      stream: true,
-    },
-    { signal: options.signal },
+  console.log(
+    `[ai] Streaming from ${slot.name}, model=${slot.model}, max_tokens=${options.maxTokens}`,
   );
+  const start = Date.now();
 
+  let stream;
+  try {
+    stream = await client.chat.completions.create(
+      {
+        model: slot.model,
+        messages: options.messages,
+        tools: options.tools,
+        max_tokens: options.maxTokens,
+        temperature: options.temperature ?? 0.7,
+        stream: true,
+      },
+      { signal: options.signal },
+    );
+  } catch (err) {
+    const elapsed = Date.now() - start;
+    const status = (err as any)?.status ?? "unknown";
+    const msg = (err as Error)?.message ?? String(err);
+    console.error(
+      `[ai] ${slot.name} stream init FAILED after ${elapsed}ms — status=${status}, message=${msg}`,
+    );
+    throw err;
+  }
+
+  let chunks = 0;
   for await (const chunk of stream) {
+    chunks++;
     const delta = chunk.choices[0]?.delta;
 
     // Handle z.ai quirk: content='' with only reasoning_content
@@ -144,6 +177,9 @@ async function streamFromProvider(
       !delta?.tool_calls &&
       (delta as Record<string, unknown>)?.reasoning_content
     ) {
+      console.warn(
+        `[ai] ${slot.name} returned empty content with reasoning_content only — treating as empty response`,
+      );
       throw new EmptyProviderResponseError(slot.name);
     }
 
@@ -166,6 +202,11 @@ async function streamFromProvider(
       }
     }
   }
+
+  const elapsed = Date.now() - start;
+  console.log(
+    `[ai] ${slot.name} stream COMPLETE — ${chunks} chunks, ${fullText.current.length} chars, ${elapsed}ms`,
+  );
 
   const assistantMessage: OpenAI.ChatCompletionMessageParam = {
     role: "assistant",

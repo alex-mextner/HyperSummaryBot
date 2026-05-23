@@ -37,11 +37,13 @@ export class TelegramStreamWriter {
     try {
       const sendMessage = this.bot.api?.sendMessage;
       if (!sendMessage) return;
+      console.log(`[stream] Sending placeholder to chat ${this.chatId}: "${this.placeholderText}"`);
       const msg = await sendMessage({
         chat_id: this.chatId,
         text: this.placeholderText,
       });
       this.messageId = msg.message_id;
+      console.log(`[stream] Placeholder sent, message_id=${msg.message_id}`);
     } catch {
       // Silently fail, will send message on first flush
     }
@@ -177,9 +179,13 @@ export class TelegramStreamWriter {
     if (this.isFinalized) return;
     this.isFinalized = true;
 
+    console.log(
+      `[stream] Finalizing message ${this.messageId} — text=${this.fullText.length} chars, toolLines=${this.toolLines.length}`,
+    );
     this.stopTyping();
     await this.flush(true);
     await this.sendFinalHtmlChunks();
+    console.log(`[stream] Finalize complete for chat ${this.chatId}`);
   }
 
   private async sendFinalHtmlChunks(): Promise<void> {
