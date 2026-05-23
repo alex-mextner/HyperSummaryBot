@@ -136,9 +136,15 @@ export async function importChatHistory(
     }
 
     const batchMessages = (batch as any).messages || [];
+    console.log(
+      `[mtproto] getHistory returned ${batchMessages.length} messages for chat ${chatId}`,
+    );
     if (batchMessages.length === 0) break;
 
     for (const msg of batchMessages) {
+      console.log(
+        `[mtproto] msg._=${msg._}, id=${msg.id}, fromId=${JSON.stringify(msg.fromId)}, message=${msg.message?.slice(0, 50)}`,
+      );
       if (msg._ === "message") {
         messages.push(msg);
         offsetId = msg.id;
@@ -184,6 +190,9 @@ export async function importChatHistory(
     }
   }
 
+  console.log(
+    `[mtproto] importChatHistory done: chatId=${chatId}, totalFetched=${messages.length}, imported=${imported}, skipped=${skipped}, existingInDb=${existingIds.size}`,
+  );
   return { imported, skipped };
 }
 
