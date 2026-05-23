@@ -45,9 +45,9 @@ function getFloodWaitSeconds(err: unknown): number | undefined {
  */
 function buildPeer(chatId: number, type: "group" | "channel", accessHash?: string | number): any {
   if (type === "group") {
-    return { _: "inputPeerChat", chat_id: chatId };
+    return { _: "inputPeerChat", chatId: chatId };
   }
-  return { _: "inputPeerChannel", channel_id: chatId, access_hash: accessHash ?? 0 };
+  return { _: "inputPeerChannel", channelId: chatId, accessHash: accessHash ?? 0 };
 }
 
 export async function canAccessChat(
