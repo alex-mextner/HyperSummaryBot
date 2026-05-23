@@ -21,6 +21,17 @@ const config = loadConfig();
 const db = initDatabase(config.DATABASE_PATH);
 const chatHistory = new ChatHistoryRepository(db);
 
+// Track chats where the bot is actually present — used to filter MTProto import
+const knownGroupIds = new Set<number>();
+// Pre-populate from existing database records
+chatHistory
+  .getAllChatIds()
+  .then((ids) => {
+    for (const id of ids) knownGroupIds.add(id);
+    console.log(`📋 Pre-loaded ${knownGroupIds.size} known chats from DB`);
+  })
+  .catch(() => {});
+
 // Create bot with derive for typed context
 const bot = new Bot(config.BOT_TOKEN)
   .extend(
@@ -318,27 +329,44 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     if (groups.length === 0) {
       await ctx.reply("Группы не найдены. Добавь меня в группу — я начну собирать историю.");
     } else {
-      await ctx.reply(`📥 Найдено ${groups.length} групп. Начинаю импорт истории в фоне...`);
-
-      for (const group of groups) {
-        (async () => {
-          try {
-            const result = await importChatHistory(chatHistory, group.id, {
-              limit: MAX_CHAT_HISTORY,
-            });
-            console.log(
-              `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
-            );
-          } catch (err) {
-            console.error(`Failed to import ${group.title}:`, err);
-          }
-        })();
-      }
-
-      await ctx.reply(
-        `🚀 Импорт запущен для ${groups.length} групп.\n\n` +
-          "История будет доступна для /summary и /search.",
+      const importableGroups = groups.filter((g) => knownGroupIds.has(g.id));
+      console.log(
+        "[connect_account] importable groups:",
+        importableGroups.length,
+        "/",
+        groups.length,
       );
+
+      if (importableGroups.length === 0) {
+        await ctx.reply(
+          "📭 Вижу твои группы в Telegram, но меня в них пока не добавили.\n\n" +
+            "Добавь меня в нужные группы, и я начну собирать историю автоматически.",
+        );
+      } else {
+        await ctx.reply(
+          `📥 Найдено ${importableGroups.length} групп, где я есть. Начинаю импорт истории в фоне...`,
+        );
+
+        for (const group of importableGroups) {
+          (async () => {
+            try {
+              const result = await importChatHistory(chatHistory, group.id, {
+                limit: MAX_CHAT_HISTORY,
+              });
+              console.log(
+                `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
+              );
+            } catch (err) {
+              console.error(`Failed to import ${group.title}:`, err);
+            }
+          })();
+        }
+
+        await ctx.reply(
+          `🚀 Импорт запущен для ${importableGroups.length} групп.\n\n` +
+            "История будет доступна для /summary и /search.",
+        );
+      }
     }
   } catch (error) {
     pendingAuthCodes.delete(userId);
@@ -482,6 +510,7 @@ bot.on("my_chat_member", async (ctx) => {
 
   // Bot was just added to the group
   if (oldStatus !== "member" && newStatus === "member") {
+    knownGroupIds.add(chat.id);
     const { isMtProtoConfigured, importChatHistory } = await import("./services/mtproto");
 
     if (await isMtProtoConfigured()) {
@@ -494,6 +523,11 @@ bot.on("my_chat_member", async (ctx) => {
         }
       })();
     }
+  }
+
+  // Bot was removed from the group
+  if (oldStatus === "member" && newStatus !== "member") {
+    knownGroupIds.delete(chat.id);
   }
 });
 
@@ -514,6 +548,7 @@ bot.on("message", async (ctx) => {
 
   // Only process group chats
   if (chat.type !== "group" && chat.type !== "supergroup") return;
+  knownGroupIds.add(chat.id);
 
   const content = buildMessageContent({
     text: ctx.text,
