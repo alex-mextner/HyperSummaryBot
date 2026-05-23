@@ -38,6 +38,9 @@ export interface EnvConfig {
   // Admin
   BOT_ADMIN_ID?: number;
   AI_DEBUG_LOGS: boolean;
+
+  // Test API (protected endpoint for debugging)
+  TEST_API_PASSWORD?: string;
 }
 
 export function requireEnv(name: string): string {
@@ -84,5 +87,6 @@ export function loadConfig(): EnvConfig {
       ? Number.parseInt(process.env.BOT_ADMIN_ID, 10)
       : undefined,
     AI_DEBUG_LOGS: process.env.AI_DEBUG_LOGS === "true",
+    TEST_API_PASSWORD: process.env.TEST_API_PASSWORD,
   };
 }

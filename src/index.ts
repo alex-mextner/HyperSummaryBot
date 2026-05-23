@@ -743,6 +743,14 @@ async function main() {
   await loadKnownGroupIds();
   await registerBotCommands();
 
+  // Start HTTP test server (if TEST_API_PASSWORD is set)
+  try {
+    const { startTestServer } = await import("./test-server");
+    startTestServer();
+  } catch (err) {
+    console.warn("[test-api] Failed to start test server:", err);
+  }
+
   // MTProto real-time sync disabled at startup to avoid crash loop
   // when session is incomplete. Re-enable after successful auth.
   // if (config.MTPROTO_API_ID && config.MTPROTO_API_HASH) {
