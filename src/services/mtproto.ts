@@ -3,12 +3,11 @@ import { loadConfig } from "../config/env";
 import { MAX_CHAT_HISTORY } from "../config/constants";
 import type { ChatHistoryRepository } from "../db/repositories/chat-history";
 
-const config = loadConfig();
-
 let _client: TelegramClient | null = null;
 
 function getClient(): TelegramClient {
   if (!_client) {
+    const config = loadConfig();
     const apiId = config.MTPROTO_API_ID;
     const apiHash = config.MTPROTO_API_HASH;
 
@@ -207,5 +206,6 @@ export async function startRealtimeSync(
 }
 
 export async function isMtProtoConfigured(): Promise<boolean> {
+  const config = loadConfig();
   return !!(config.MTPROTO_API_ID && config.MTPROTO_API_HASH);
 }

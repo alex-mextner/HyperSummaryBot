@@ -74,6 +74,34 @@ describe("TelegramStreamWriter", () => {
     expect(deleteCalls[0]!.chat_id).toBe(123);
   });
 
+  test("deleteMessage does nothing when messageId is null", async () => {
+    const bot = createMockBot();
+    const writer = new TelegramStreamWriter(bot as any, 123);
+    // Call deleteMessage synchronously before initPlaceholder sets messageId
+    await writer.deleteMessage();
+
+    const deleteCalls = gramioApiCalls.filter((c) => c.method === "deleteMessage");
+    expect(deleteCalls.length).toBe(0);
+  });
+
+  test("deleteMessage ignores API failures", async () => {
+    const bot = {
+      api: {
+        sendMessage: mock(async () => ({ message_id: 42 })),
+        deleteMessage: mock(async () => {
+          throw new Error("Message not found");
+        }),
+        sendChatAction: mock(async () => true),
+        editMessageText: mock(async () => true),
+      },
+    };
+    const writer = new TelegramStreamWriter(bot as any, 123);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Should not throw
+    await expect(writer.deleteMessage()).resolves.toBeUndefined();
+  });
+
   test("sendRemainingChunks splits text over 4000 chars", async () => {
     const bot = createMockBot();
     const writer = new TelegramStreamWriter(bot as any, 123);
