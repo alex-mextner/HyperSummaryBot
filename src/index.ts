@@ -5,11 +5,10 @@ import { loadConfig } from "./config/env";
 import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
-import { generateSummary, type SummaryType } from "./agents/summary";
+import { generateSummary } from "./agents/summary";
 import {
   buildMessageContent,
   buildForwardFromNameForDb,
-  parseSummaryArgs,
   parseSearchQuery,
   parseAskQuestion,
 } from "./bot/message-processor";
@@ -24,11 +23,6 @@ const chatHistory = new ChatHistoryRepository(db);
 
 // Track chats where the bot is actually present — used to filter MTProto import
 const knownGroupIds = new Set<number>();
-
-/** Check if a group (by MTProto id + type) is known to the bot. */
-function isGroupKnown(mtprotoId: number, type: "group" | "channel"): boolean {
-  return knownGroupIds.has(mtprotoId) || knownGroupIds.has(toBotApiChatId(mtprotoId, type));
-}
 
 async function loadKnownGroupIds(): Promise<void> {
   try {
@@ -137,14 +131,10 @@ bot.command("summary", async (ctx) => {
     return;
   }
 
-  const args = parseSummaryArgs(ctx.text || "");
-  const type = args.type as SummaryType;
-  const count = args.count;
-
-  await ctx.reply(`📊 Генерирую саммари типа "${type}" за последние ${count} сообщений...`);
+  await ctx.reply("📊 Анализирую все сообщения и генерирую подробное саммари…");
 
   try {
-    const messages = await ctx.chatHistory.getRecent(targetChatId, count);
+    const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
 
     if (messages.length === 0) {
       await ctx.reply("Нет сообщений для анализа.");
@@ -159,12 +149,11 @@ bot.command("summary", async (ctx) => {
     await generateSummary({
       chatId: targetChatId,
       messages: formattedMessages,
-      type,
       bot,
     });
   } catch (error) {
     console.error("Summary error:", error);
-    await ctx.reply("❌ Ошибка при генерации саммари. Попробуйте позже.");
+    await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
   }
 });
 

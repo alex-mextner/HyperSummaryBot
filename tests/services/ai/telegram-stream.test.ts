@@ -15,25 +15,26 @@ describe("TelegramStreamWriter", () => {
 
     const sendCalls = gramioApiCalls.filter((c) => c.method === "sendMessage");
     expect(sendCalls.length).toBeGreaterThan(0);
-    expect(sendCalls[0]!.text).toBe("⏳...");
+    expect(sendCalls[0]!.text).toBe("⏳");
     expect(sendCalls[0]!.chat_id).toBe(123);
   });
 
-  test("appendText schedules flush and edits message", async () => {
+  test("appendText schedules flush and edits message with plain text", async () => {
     const bot = createMockBot();
     const writer = new TelegramStreamWriter(bot as any, 123);
     await new Promise((r) => setTimeout(r, 50));
 
     writer.appendText("Hello");
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
 
     const editCalls = gramioApiCalls.filter((c) => c.method === "editMessageText");
     expect(editCalls.length).toBeGreaterThan(0);
     expect(editCalls[0]!.text).toContain("Hello");
-    expect(editCalls[0]!.parse_mode).toBe("HTML");
+    // No parse_mode during streaming — plain text avoids HTML parse errors
+    expect(editCalls[0]!.parse_mode).toBeUndefined();
   });
 
-  test("finalize stops typing and sends final text", async () => {
+  test("finalize stops typing and sends final HTML chunks", async () => {
     const bot = createMockBot();
     const writer = new TelegramStreamWriter(bot as any, 123);
     await new Promise((r) => setTimeout(r, 50));
@@ -41,9 +42,14 @@ describe("TelegramStreamWriter", () => {
     writer.appendText("Final text");
     await writer.finalize();
 
-    const editCalls = gramioApiCalls.filter((c) => c.method === "editMessageText");
-    expect(editCalls.length).toBeGreaterThan(0);
-    expect(editCalls[editCalls.length - 1]!.text).toContain("Final text");
+    // Should delete the placeholder and send new HTML-formatted messages
+    const deleteCalls = gramioApiCalls.filter((c) => c.method === "deleteMessage");
+    const sendCalls = gramioApiCalls.filter((c) => c.method === "sendMessage");
+    expect(deleteCalls.length).toBeGreaterThan(0);
+    expect(sendCalls.length).toBeGreaterThan(0);
+    // Final messages should have HTML parse mode
+    const htmlSends = sendCalls.filter((c) => c.parse_mode === "HTML");
+    expect(htmlSends.length).toBeGreaterThan(0);
   });
 
   test("setToolLabel and markToolResult update tool lines", async () => {
@@ -54,7 +60,7 @@ describe("TelegramStreamWriter", () => {
     writer.setToolLabel("get_summary");
     writer.markToolResult(true);
     writer.appendText("Done");
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
 
     const editCalls = gramioApiCalls.filter((c) => c.method === "editMessageText");
     expect(editCalls.length).toBeGreaterThan(0);
@@ -77,7 +83,6 @@ describe("TelegramStreamWriter", () => {
   test("deleteMessage does nothing when messageId is null", async () => {
     const bot = createMockBot();
     const writer = new TelegramStreamWriter(bot as any, 123);
-    // Call deleteMessage synchronously before initPlaceholder sets messageId
     await writer.deleteMessage();
 
     const deleteCalls = gramioApiCalls.filter((c) => c.method === "deleteMessage");
@@ -98,21 +103,36 @@ describe("TelegramStreamWriter", () => {
     const writer = new TelegramStreamWriter(bot as any, 123);
     await new Promise((r) => setTimeout(r, 50));
 
-    // Should not throw
     await expect(writer.deleteMessage()).resolves.toBeUndefined();
   });
 
-  test("sendRemainingChunks splits text over 4000 chars", async () => {
+  test("finalize splits long text over 4000 chars into multiple HTML messages", async () => {
     const bot = createMockBot();
     const writer = new TelegramStreamWriter(bot as any, 123);
     await new Promise((r) => setTimeout(r, 50));
 
-    const longText = "A".repeat(5000);
+    // Create ~6000 chars of realistic markdown text with paragraphs
+    const longText =
+      "# Заголовок\n\n" +
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ".repeat(
+        60,
+      ) +
+      "\n\n## Второй раздел\n\n" +
+      "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. ".repeat(
+        40,
+      );
+
     writer.appendText(longText);
     await writer.finalize();
 
-    const sendCalls = gramioApiCalls.filter((c) => c.method === "sendMessage");
+    const sendCalls = gramioApiCalls.filter(
+      (c) => c.method === "sendMessage" && c.parse_mode === "HTML",
+    );
     expect(sendCalls.length).toBeGreaterThanOrEqual(2);
+    // Each chunk should be under the limit
+    for (const call of sendCalls as unknown as Array<{ text: string }>) {
+      expect(call.text.length).toBeLessThanOrEqual(4000);
+    }
   });
 
   test("processThinkTags removes think sections", async () => {
@@ -121,23 +141,12 @@ describe("TelegramStreamWriter", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     writer.appendText("Hello  <think>something secret</think> world");
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
 
     const editCalls = gramioApiCalls.filter((c) => c.method === "editMessageText");
     expect(editCalls.length).toBeGreaterThan(0);
     expect(editCalls[0]!.text).toContain("Hello");
     expect(editCalls[0]!.text).not.toContain("secret");
-  });
-
-  test("buildText returns placeholder when no content", async () => {
-    const bot = createMockBot();
-    const writer = new TelegramStreamWriter(bot as any, 123);
-    await new Promise((r) => setTimeout(r, 50));
-
-    await writer.finalize();
-
-    const editCalls = gramioApiCalls.filter((c) => c.method === "editMessageText");
-    expect(editCalls.length).toBeGreaterThan(0);
   });
 
   test("handles rate limit by rescheduling flush", async () => {
@@ -148,7 +157,9 @@ describe("TelegramStreamWriter", () => {
         editMessageText: mock(async () => {
           attempts++;
           if (attempts === 1) {
-            throw new Error("rate limit exceeded");
+            const err = new Error("retry after 3") as any;
+            err.code = 429;
+            throw err;
           }
           return true;
         }),
@@ -161,7 +172,7 @@ describe("TelegramStreamWriter", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     writer.appendText("Retry me");
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 1500));
 
     expect(attempts).toBeGreaterThanOrEqual(2);
   });

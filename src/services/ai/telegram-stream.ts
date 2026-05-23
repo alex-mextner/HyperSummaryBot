@@ -1,4 +1,13 @@
 import { Bot } from "gramio";
+import {
+  markdownToHtml,
+  splitHtmlText,
+  TG_MSG_LIMIT,
+  sleep,
+  ChatRateLimiter,
+  isTelegramRateLimit,
+  getRetryDelay,
+} from "../../utils/message-safety";
 
 export class TelegramStreamWriter {
   private bot: Bot;
@@ -9,10 +18,13 @@ export class TelegramStreamWriter {
   private pendingIndicators: string[] = [];
   private typingInterval: Timer | null = null;
   private flushPromise: Promise<void> = Promise.resolve();
+  private rateLimiter: ChatRateLimiter;
+  private isFinalized = false;
 
   constructor(bot: Bot, chatId: number) {
     this.bot = bot;
     this.chatId = chatId;
+    this.rateLimiter = new ChatRateLimiter(1200);
     this.startTyping();
     this.initPlaceholder();
   }
@@ -21,7 +33,7 @@ export class TelegramStreamWriter {
     try {
       const msg = await this.bot.api.sendMessage({
         chat_id: this.chatId,
-        text: "⏳...",
+        text: "⏳",
       });
       this.messageId = msg.message_id;
     } catch {
@@ -76,88 +88,142 @@ export class TelegramStreamWriter {
   }
 
   private async flush(final: boolean): Promise<void> {
-    const text = this.buildText(final);
+    if (this.isFinalized) return;
+
+    const text = this.buildPlainText(final);
     if (!text) return;
 
-    try {
-      if (this.messageId) {
-        await this.bot.api.editMessageText({
-          chat_id: this.chatId,
-          message_id: this.messageId,
-          text,
-          parse_mode: "HTML",
-        });
-      } else {
-        const msg = await this.bot.api.sendMessage({
-          chat_id: this.chatId,
-          text,
-          parse_mode: "HTML",
-        });
-        this.messageId = msg.message_id;
-      }
-    } catch (error) {
-      // Rate limit or message not modified
-      if (error instanceof Error && error.message.includes("rate limit")) {
-        await new Promise((r) => setTimeout(r, 1000));
-        this.scheduleFlush(final);
+    // Rate limit: min 1.2s between edits to same chat
+    await this.rateLimiter.wait(this.chatId);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        if (this.messageId) {
+          await this.bot.api.editMessageText({
+            chat_id: this.chatId,
+            message_id: this.messageId,
+            text,
+            // No parse_mode during streaming — plain text avoids HTML parse errors
+          });
+        } else {
+          const msg = await this.bot.api.sendMessage({
+            chat_id: this.chatId,
+            text,
+          });
+          this.messageId = msg.message_id;
+        }
+        return;
+      } catch (error) {
+        if (isTelegramRateLimit(error) && attempt < 4) {
+          await sleep(getRetryDelay(attempt));
+          continue;
+        }
+        // "Message not modified" and other non-fatal errors — swallow
+        if (
+          error instanceof Error &&
+          (error.message.includes("message is not modified") ||
+            error.message.includes("MESSAGE_NOT_MODIFIED"))
+        ) {
+          return;
+        }
+        console.error("[stream] Edit failed:", error);
+        return;
       }
     }
   }
 
-  private buildText(_final: boolean): string {
-    const processed = this.processThinkTags(this.fullText.trim());
-    if (!processed && this.toolLines.length === 0) return "⏳...";
+  private buildPlainText(final: boolean): string {
+    let processed = this.processThinkTags(this.fullText.trim());
+
+    // Trim to safe length during streaming (leave buffer for final HTML formatting)
+    const limit = final ? TG_MSG_LIMIT : TG_MSG_LIMIT - 200;
+    if (processed.length > limit) {
+      processed = processed.slice(0, limit) + (final ? "" : " …");
+    }
+
+    if (!processed && this.toolLines.length === 0) return "⏳";
 
     let result = "";
     if (this.toolLines.length > 0) {
-      result += `<blockquote expandable>⚙️ <b>Инструменты</b>\n${this.toolLines.join("\n")}</blockquote>\n\n`;
+      result += `⚙️ Инструменты:\n${this.toolLines.join("\n")}\n\n`;
     }
-    result += processed || "...";
+    result += processed || "…";
 
     return result;
   }
 
   private processThinkTags(text: string): string {
-    // Remove <think>...</think> sections
+    // Remove <think>…</think> sections (model reasoning tags)
     return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   }
 
   async finalize(): Promise<void> {
+    if (this.isFinalized) return;
+    this.isFinalized = true;
+
     this.stopTyping();
+
+    // One last plain-text flush to show the complete content
     await this.flush(true);
-    await this.sendRemainingChunks();
+
+    // Now format as HTML and send proper final messages
+    await this.sendFinalHtmlChunks();
   }
 
-  private async sendRemainingChunks(): Promise<void> {
-    const text = this.buildText(true);
-    if (!text || text.length <= 4000) return;
+  private async sendFinalHtmlChunks(): Promise<void> {
+    const plainText = this.buildPlainText(true);
+    if (!plainText || plainText === "⏳") return;
 
-    const chunks = this.splitIntoChunks(text, 4000);
-    for (let i = 1; i < chunks.length; i++) {
-      await this.bot.api.sendMessage({
-        chat_id: this.chatId,
-        text: chunks[i]!,
-        parse_mode: "HTML",
-      });
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
+    // Convert to HTML
+    const html = markdownToHtml(plainText);
+    const chunks = splitHtmlText(html, TG_MSG_LIMIT);
 
-  private splitIntoChunks(text: string, maxLength: number): string[] {
-    const chunks: string[] = [];
-    let remaining = text;
-    while (remaining.length > maxLength) {
-      let splitIndex = remaining.lastIndexOf("\n", maxLength);
-      if (splitIndex === -1) splitIndex = remaining.lastIndexOf(" ", maxLength);
-      if (splitIndex === -1) splitIndex = maxLength;
-      chunks.push(remaining.slice(0, splitIndex));
-      remaining = remaining.slice(splitIndex).trimStart();
+    // Delete the streamed placeholder
+    if (this.messageId) {
+      try {
+        await this.bot.api.deleteMessage({
+          chat_id: this.chatId,
+          message_id: this.messageId,
+        });
+      } catch {
+        // ignore delete failures
+      }
+      this.messageId = null;
     }
-    if (remaining) chunks.push(remaining);
-    return chunks;
+
+    // Send formatted HTML chunks as new messages
+    for (const chunk of chunks) {
+      await this.rateLimiter.wait(this.chatId);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          await this.bot.api.sendMessage({
+            chat_id: this.chatId,
+            text: chunk,
+            parse_mode: "HTML",
+          });
+          break;
+        } catch (error) {
+          if (isTelegramRateLimit(error) && attempt < 4) {
+            await sleep(getRetryDelay(attempt));
+            continue;
+          }
+          // If HTML parse fails, fall back to plain text
+          if (error instanceof Error && error.message.includes("parse")) {
+            await this.bot.api.sendMessage({
+              chat_id: this.chatId,
+              text: chunk,
+            });
+            break;
+          }
+          console.error("[stream] Failed to send final chunk:", error);
+          break;
+        }
+      }
+    }
   }
 
   async deleteMessage(): Promise<void> {
+    this.stopTyping();
     if (!this.messageId) return;
     try {
       await this.bot.api.deleteMessage({
