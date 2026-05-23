@@ -272,9 +272,19 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
           pendingAuthCodes.set(userId, { resolve, reject });
         });
       },
-      password: async (hint?: string) => {
-        console.log("[connect_account] prompting for 2fa password", { hint });
+      password: async () => {
+        console.log("[connect_account] prompting for 2fa password");
         passwordAttemptCounts.set(userId, 0);
+
+        // mtcute does NOT pass hint as argument — fetch it manually from Telegram API
+        let hint: string | undefined;
+        try {
+          const pwInfo = await client.call({ _: "account.getPassword" });
+          hint = (pwInfo as any).hint || undefined;
+          console.log("[connect_account] 2fa hint fetched:", hint ?? "(none)");
+        } catch (e) {
+          console.log("[connect_account] failed to fetch 2fa hint:", e);
+        }
 
         let msg =
           "🔒 <b>Включена двухэтапная аутентификация</b>\n\n" +
