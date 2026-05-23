@@ -28,7 +28,7 @@ export class TelegramStreamWriter {
     this.bot = bot;
     this.chatId = chatId;
     this.placeholderText = placeholderText;
-    this.rateLimiter = new ChatRateLimiter(1200);
+    this.rateLimiter = new ChatRateLimiter(900);
     this.startTyping();
     this.initPlaceholder();
   }
