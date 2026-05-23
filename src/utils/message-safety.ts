@@ -257,23 +257,51 @@ export function isTelegramRateLimit(error: unknown): boolean {
   );
 }
 
-/** Send a message safely: chunk if too long, handle rate limits, close HTML tags. */
+/** Send a message safely: chunk if too long, handle rate limits, close HTML tags.
+ *  Accepts either a GramIO context or a raw bot + chatId. */
 export async function safeSendMessage(
-  bot: any,
-  chatId: number,
-  text: string,
-  options: { parseMode?: "HTML" | "MarkdownV2"; rateLimiter?: ChatRateLimiter } = {},
+  ctxOrBot: any,
+  chatIdOrText: number | string,
+  textOrOptions?: string | { parseMode?: "HTML" | "MarkdownV2"; rateLimiter?: ChatRateLimiter },
+  options?: { parseMode?: "HTML" | "MarkdownV2"; rateLimiter?: ChatRateLimiter },
 ): Promise<void> {
-  const limiter = options.rateLimiter ?? new ChatRateLimiter();
+  let bot: any;
+  let chatId: number;
+  let text: string;
+  let opts: { parseMode?: "HTML" | "MarkdownV2"; rateLimiter?: ChatRateLimiter };
+
+  // Detect signature: safeSendMessage(ctx, text, options?) or safeSendMessage(bot, chatId, text, options)
+  if (typeof chatIdOrText === "string") {
+    // ctx signature — GramIO contexts expose .bot (the Bot instance)
+    bot = ctxOrBot.bot ?? ctxOrBot;
+    chatId = ctxOrBot.chat?.id ?? ctxOrBot.chatId;
+    text = chatIdOrText;
+    opts = (textOrOptions as typeof opts) ?? {};
+  } else {
+    // bot signature
+    bot = ctxOrBot;
+    chatId = chatIdOrText as number;
+    text = textOrOptions as string;
+    opts = options ?? {};
+  }
+
+  if (!chatId) {
+    console.warn("[safeSendMessage] No chatId available");
+    return;
+  }
+
+  const limiter = opts.rateLimiter ?? new ChatRateLimiter();
   let content = text;
 
   // Convert markdown to HTML if using HTML parse mode
-  if (options.parseMode === "HTML") {
+  if (opts.parseMode === "HTML") {
     content = markdownToHtml(content);
+    content = sanitizeTelegramHtml(content);
+    content = closeUnclosedHtmlTags(content);
   }
 
   const chunks =
-    options.parseMode === "HTML"
+    opts.parseMode === "HTML"
       ? splitHtmlText(content, TG_MSG_LIMIT)
       : splitPlainText(content, TG_MSG_LIMIT);
 
@@ -284,7 +312,7 @@ export async function safeSendMessage(
         await bot.api.sendMessage({
           chat_id: chatId,
           text: chunk,
-          parse_mode: options.parseMode,
+          parse_mode: opts.parseMode,
         });
         break;
       } catch (err) {
