@@ -26,6 +26,7 @@
     "drizzle-orm": "latest",
     "gramio": "latest",
     "openai": "latest",
+    "pino": "^10.3.1",
     "telegramify-markdown": "latest"
   },
   "devDependencies": {

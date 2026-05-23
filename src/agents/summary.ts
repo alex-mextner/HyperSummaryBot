@@ -39,7 +39,8 @@ const DRAFT_SYSTEM_PROMPT = `Ты — ассистент для анализа �
 - Цитата: <blockquote>текст</blockquote>
 - Код: <code>текст</code>
 - Спойлер: <span class="tg-spoiler">текст</span>
-- НЕ используй markdown (##, **, __, | таблицы)
+- НЕ используй markdown (##, **, __, | таблицы) в основном тексте
+- Для таблиц используй инструмент render_table — внутри ячеек markdown разрешён
 - НЕ придумывай фактов — только из сообщений
 - Если нет информации — напиши "Не обсуждалось"
 - Язык: русский`;
@@ -50,7 +51,7 @@ const SUMMARY_TOOLS: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "render_table",
       description:
-        "Render a structured table (action items, decisions, comparisons) as HTML. Use this INSTEAD of writing markdown tables in the text.",
+        "Render a structured table (action items, decisions, comparisons) as HTML. Use this INSTEAD of writing markdown tables in the main text. Cell values may use markdown formatting (**bold**, *italic*, [links](url)) — it will be converted to HTML automatically.",
       parameters: {
         type: "object",
         properties: {
@@ -62,7 +63,8 @@ const SUMMARY_TOOLS: OpenAI.ChatCompletionTool[] = [
           rows: {
             type: "array",
             items: { type: "array", items: { type: "string" } },
-            description: "Table rows, each is an array of cell strings",
+            description:
+              "Table rows, each is an array of cell strings. Markdown formatting is allowed in cells and will be converted to HTML.",
           },
           title: {
             type: "string",

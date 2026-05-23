@@ -172,27 +172,27 @@ export function splitHtmlText(html: string, maxLength: number = TG_MSG_LIMIT): s
   return chunks;
 }
 
-/** Basic markdown → Telegram HTML conversion. */
+/** Convert markdown syntax to Telegram HTML.
+ *  PRESERVES existing HTML tags — the AI outputs HTML directly per system prompt.
+ *  Only converts markdown patterns (**, __, ~~, [](url), etc.) to HTML.
+ *  Does NOT globally escape < > — valid HTML tags stay intact. */
 export function markdownToHtml(text: string): string {
   let html = text;
 
-  // Escape raw HTML first (but preserve our own tags)
-  html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-  // Tables — markdown tables don't contain < > so they survive escaping intact
+  // Tables — markdown tables converted to <pre> ASCII tables
   html = markdownTableToHtml(html);
 
-  // Code blocks
+  // Code blocks (but not inside <pre> or <code>)
   html = html.replace(/```([\s\S]*?)```/g, "<pre>$1</pre>");
 
   // Inline code
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-  // Bold
+  // Bold — match **text** or __text__
   html = html.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   html = html.replace(/__([^_]+)__/g, "<b>$1</b>");
 
-  // Italic
+  // Italic — match *text* or _text_
   html = html.replace(/\*([^*]+)\*/g, "<i>$1</i>");
   html = html.replace(/_([^_]+)_/g, "<i>$1</i>");
 
