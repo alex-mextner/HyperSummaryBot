@@ -256,8 +256,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
         console.log("[connect_account] prompting for auth code");
         await ctx.reply(
           "🔑 <b>Код отправлен в Telegram</b>\n\n" +
-            "Введите код из сообщения от Telegram.\n\n" +
-            "<i>Совет: можешь добавить пробелы или дефисы, чтобы Telegram не скрыл сообщение.</i>",
+            "Введи код через пробелы или дефисы (напр. <code>1 2 3 4 5</code> или <code>123-45</code>):",
           { parse_mode: "HTML" },
         );
 
@@ -352,7 +351,10 @@ bot.on("message", async (ctx) => {
 
     // Validate: must be 5 digits after normalization
     if (!/^\d{5}$/.test(code)) {
-      await ctx.reply("❌ Код должен содержать ровно 5 цифр. Попробуй ещё раз.");
+      await ctx.reply(
+        "❌ Неверный код. Введи 5 цифр через пробелы или дефисы (напр. <code>1 2 3 4 5</code> или <code>123-45</code>).",
+        { parse_mode: "HTML" },
+      );
       return;
     }
 
