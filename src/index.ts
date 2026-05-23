@@ -601,7 +601,20 @@ bot.on("my_chat_member", async (ctx) => {
             type: chat.type === "supergroup" ? "channel" : "group",
           });
         } catch (error) {
-          console.error("Auto MTProto import error:", error);
+          console.error("Summary error:", error);
+          const errMsg = error instanceof Error ? error.message : "";
+          if (
+            errMsg.includes("401") ||
+            errMsg.includes("token") ||
+            errMsg.includes("All AI providers failed")
+          ) {
+            await ctx.reply(
+              "❌ AI-сервисы временно недоступны — ключи API устарели.\n" +
+                "Нужно обновить ZAI_API_KEY / HF_TOKEN / GEMINI_API_KEY в .env",
+            );
+          } else {
+            await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
+          }
         }
       })();
     }
