@@ -2,7 +2,7 @@ import { Bot } from "gramio";
 import { session } from "@gramio/session";
 import { sqliteStorage } from "@gramio/storage-sqlite";
 import { loadConfig } from "./config/env";
-import { MAX_CHAT_HISTORY, SUMMARY_MAX_MESSAGES } from "./config/constants";
+import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary } from "./agents/summary";
@@ -162,14 +162,12 @@ bot.command(
     }
 
     try {
-      const allMessages = await ctx.chatHistory.getRecent(targetChatId, SUMMARY_MAX_MESSAGES);
+      const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
 
-      if (allMessages.length === 0) {
+      if (messages.length === 0) {
         await ctx.reply("Нет сообщений для анализа.");
         return;
       }
-
-      const messages = allMessages.slice(-SUMMARY_MAX_MESSAGES);
 
       await generateSummary({
         chatId: targetChatId,

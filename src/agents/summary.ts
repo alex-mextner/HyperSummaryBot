@@ -186,6 +186,11 @@ async function generateDraft(
 async function reviewAndRefine(
   draft: string,
   formattedMessages: string,
+  callbacks: {
+    onTextDelta?: (text: string) => void;
+    onToolCallStart?: (name: string, input: Record<string, unknown>) => void;
+    onToolCallResult?: (name: string, result: unknown) => void;
+  } = {},
 ): Promise<{ text: string; toolCalls: Array<{ name: string; arguments: string; id: string }> }> {
   const result = await aiStreamRound(
     {
@@ -202,7 +207,7 @@ async function reviewAndRefine(
       maxTokens: 4096,
       temperature: 0.2,
     },
-    {},
+    callbacks,
   );
   return { text: result.text, toolCalls: result.toolCalls };
 }
@@ -231,15 +236,20 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
       `[summary] Draft phase complete — ${draftResult.text.length} chars, ${Date.now() - draftStart}ms`,
     );
 
-    // Phase 2: Review and refine (silent) — capped at 60s to avoid hanging on slow providers
-    writer.appendText("\n\n[проверка фактов…]");
+    // Phase 2: Review and refine — streamed live so user sees each fact being checked
+    let reviewAccumulator = "";
     const reviewStart = Date.now();
     let reviewResult = {
       text: draftResult.text,
       toolCalls: [] as Array<{ name: string; arguments: string; id: string }>,
     };
     try {
-      const reviewPromise = reviewAndRefine(draftResult.text, formattedMessages);
+      const reviewPromise = reviewAndRefine(draftResult.text, formattedMessages, {
+        onTextDelta: (delta) => {
+          reviewAccumulator += delta;
+          writer.replaceText(reviewAccumulator);
+        },
+      });
       const timeoutPromise = new Promise<never>((_, reject) => {
         const id = setTimeout(() => {
           clearTimeout(id);
@@ -256,6 +266,7 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
         reviewError,
       );
       reviewResult = draftResult;
+      writer.replaceText(draftResult.text);
     }
     let final = reviewResult.text;
 
