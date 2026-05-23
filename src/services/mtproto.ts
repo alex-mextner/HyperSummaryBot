@@ -242,7 +242,7 @@ export async function getCommonGroups(
   const inputUser = {
     _: "inputUser" as const,
     userId: botUser.id,
-    accessHash: botUser.access_hash,
+    accessHash: botUser.accessHash ?? botUser.access_hash,
   };
 
   // Get common chats (groups where both user and bot are members)
