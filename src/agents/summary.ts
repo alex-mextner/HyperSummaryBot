@@ -384,7 +384,8 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
     }
 
     // Footer: progress indicator with metadata
-    const sectionCount = (final.match(/###\s/g) || []).length;
+    // Sections may be wrapped in <b> tags: <b>### Title</b> or ### Title
+    const sectionCount = (final.match(/<b>###\s+|###\s+/g) || []).length;
     const processingTime = Math.round((Date.now() - totalStart) / 1000);
     final += `\n\n<i>📊 ${options.messages.length} сообщений | ${sectionCount} секций | ⏱ ${processingTime}с</i>`;
 
