@@ -109,6 +109,24 @@ export async function aiStreamRound(
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       const status = (error as any)?.status ?? "no-status";
+      // Partial output recovery: if we got some text but the model died,
+      // and output is very short, treat as retryable and ask next model to continue.
+      if (textEmitted && fullText.current.length < 500) {
+        console.warn(
+          `[ai] ${slot.name} PARTIAL FAILURE (${fullText.current.length} chars) — trying next provider with continuation context...`,
+        );
+        // Inject partial output as an assistant message so next model can continue
+        options.messages = [
+          ...options.messages,
+          { role: "assistant", content: fullText.current },
+          {
+            role: "user",
+            content: "Продолжи с того места, где оборвался текст выше. Допиши оставшиеся секции.",
+          },
+        ];
+        fullText.current = ""; // reset accumulator for next model
+        continue;
+      }
       if (textEmitted) {
         console.error(
           `[ai] ${slot.name} FAILED after text already emitted — aborting round. status=${status}, error=${msg}`,

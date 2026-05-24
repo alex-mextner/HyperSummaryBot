@@ -376,6 +376,18 @@ export async function generateSummary(options: SummaryAgentOptions): Promise<str
       final += "\n\n" + tableHtmlParts.join("\n\n");
     }
 
+    // If review produced almost nothing, fallback to draft + warn user
+    if (reviewResult.text.length < 50 && draftResult.text.length > 100) {
+      final = draftResult.text;
+      final += "\n\n<i>⚠️ Проверка фактов не завершена (черновик)</i>";
+      console.warn("[summary] Review returned empty text, falling back to draft");
+    }
+
+    // Footer: progress indicator with metadata
+    const sectionCount = (final.match(/###\s/g) || []).length;
+    const processingTime = Math.round((Date.now() - totalStart) / 1000);
+    final += `\n\n<i>📊 ${options.messages.length} сообщений | ${sectionCount} секций | ⏱ ${processingTime}с</i>`;
+
     // Replace streamed draft with refined final version
     writer.replaceText(final);
 

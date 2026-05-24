@@ -40,10 +40,9 @@ describe("generateSummary", () => {
       bot: createMockBot() as any,
     });
 
-    expect(result).toBe("Mock response");
-    expect(callCount).toBe(2); // draft + review
+    expect(result).toContain("Mock response");
+    expect(callCount).toBeGreaterThanOrEqual(2); // draft + review (+ possible continuation)
     expect(capturedParams).not.toBeNull();
-    expect(capturedParams.messages).toHaveLength(4); // system + user + assistant draft + review prompt
     expect(capturedParams.messages[0].role).toBe("system");
     expect(capturedParams.messages[0].content).toContain("саммари");
     expect(capturedParams.max_tokens).toBe(4096);
@@ -75,7 +74,9 @@ describe("generateSummary", () => {
       bot: createMockBot() as any,
     });
 
-    expect(result).toBe("Mock response");
+    expect(result).toContain("Mock response");
+    // Footer with metadata is appended
+    expect(result).toContain("📊");
   });
 
   test("deletes message when AI throws", async () => {

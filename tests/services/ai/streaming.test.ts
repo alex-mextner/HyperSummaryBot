@@ -65,17 +65,36 @@ describe("aiStreamRound", () => {
     expect(result.text).toBe("Fallback");
   });
 
-  test("does not fallback if text was already emitted", async () => {
+  test("fallbacks if text was short (< 500 chars) and model failed", async () => {
     setClientResponse(zaiClient(), {
       iterator: async function* () {
         yield { choices: [{ delta: { content: "Partial" } }] };
         throw new Error("network error after partial text");
       },
     });
+    setClientResponse(hfClient(), {
+      chunks: [{ choices: [{ delta: { content: "HF continued" } }] }],
+    });
+
+    const result = await aiStreamRound(
+      { messages: [{ role: "user", content: "Hi" }], maxTokens: 10 },
+      {},
+    );
+
+    expect(result.text).toContain("HF continued");
+  });
+
+  test("does not fallback if substantial text (> 500 chars) was already emitted", async () => {
+    setClientResponse(zaiClient(), {
+      iterator: async function* () {
+        yield { choices: [{ delta: { content: "a".repeat(600) } }] };
+        throw new Error("network error after substantial text");
+      },
+    });
 
     await expect(
       aiStreamRound({ messages: [{ role: "user", content: "Hi" }], maxTokens: 10 }, {}),
-    ).rejects.toThrow("network error after partial text");
+    ).rejects.toThrow("network error after substantial text");
   });
 
   test("handles z.ai quirk (empty content with reasoning_content)", async () => {
