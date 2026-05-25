@@ -57,6 +57,7 @@ const VOID_TAGS = new Set([
 
 /** Strip all HTML tags and attributes that are NOT in Telegram's allowlist.
  *  Preserves allowed tags and their permitted attributes.
+ *  Also strips markdown heading markers (###) that AI sometimes leaves inside <b>.
  *  Does NOT close unclosed tags — use closeUnclosedHtmlTags after this. */
 export function sanitizeTelegramHtml(html: string): string {
   const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/g;
@@ -128,6 +129,31 @@ export function closeUnclosedHtmlTags(html: string): string {
       .map((t) => `</${t}>`)
       .join("")
   );
+}
+
+/** Return list of HTML tags that are still open at the end of the string.
+ *  Only counts ALLOWED_TAGS. Used for multi-message streaming to preserve
+ *  formatting state across message boundaries. */
+export function getOpenTags(html: string): string[] {
+  const openTags: string[] = [];
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)[^>]*?>/g;
+  let match;
+
+  while ((match = tagRegex.exec(html)) !== null) {
+    const fullTag = match[0];
+    const tagName = match[2]!.toLowerCase();
+
+    if (!ALLOWED_TAGS.has(tagName)) continue;
+
+    if (fullTag.startsWith("</")) {
+      const idx = openTags.lastIndexOf(tagName);
+      if (idx !== -1) openTags.splice(idx, 1);
+    } else if (!fullTag.endsWith("/>") && !VOID_TAGS.has(tagName)) {
+      openTags.push(tagName);
+    }
+  }
+
+  return openTags;
 }
 
 /** Split HTML text into chunks under maxLength, closing tags per chunk.
@@ -202,7 +228,8 @@ export function markdownToHtml(text: string): string {
   // Links [text](url)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
 
-  // Headings
+  // Headings — plain markdown AND headings leaked inside HTML tags (e.g. <b>### Title</b>)
+  html = html.replace(/<([a-zA-Z][a-zA-Z0-9-]*)>\s*#{1,6}\s+(.+?)<\/\1>/g, "<$1>$2</$1>");
   html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
 
   // Bullet lists

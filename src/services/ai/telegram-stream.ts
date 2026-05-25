@@ -1,6 +1,7 @@
 import { Bot } from "gramio";
 import {
   closeUnclosedHtmlTags,
+  markdownToHtml,
   sanitizeTelegramHtml,
   splitHtmlText,
   TG_MSG_LIMIT,
@@ -42,6 +43,14 @@ export class TelegramStreamWriter {
   private placeholderText: string;
   private spinnerFrame = 0;
   private hasRealContent = false;
+
+  /** IDs of messages sent as live chunks (> limit). Tracked so they can be
+   *  deleted when the text is replaced with the final version. */
+  private sentMessageIds: number[] = [];
+
+  /** Number of chars from the buffer already committed as live messages.
+   *  The full buffer is kept intact so finalize() can send the complete text. */
+  private liveOffset = 0;
 
   constructor(bot: Bot, chatId: number, placeholderText = "⏳") {
     this.bot = bot;
@@ -120,12 +129,31 @@ export class TelegramStreamWriter {
     this.scheduleFlush();
   }
 
-  /** Replace entire buffer (used for review phase rewrite). */
+  /** Replace entire buffer (used for review phase rewrite).
+   *  Deletes any previously sent live chunks so stale drafts don't linger. */
   replaceText(text: string): void {
     if (this.isFinalized) return;
+    if (this.sentMessageIds.length > 0) {
+      const ids = [...this.sentMessageIds];
+      this.sentMessageIds = [];
+      this.deleteChunkMessages(ids).catch(() => {});
+    }
     this.buffer = text;
+    this.liveOffset = 0;
     this.lastSentText = ""; // force re-send, previous draft is irrelevant
     this.scheduleFlush();
+  }
+
+  private async deleteChunkMessages(ids: number[]): Promise<void> {
+    const deleteMessage = this.bot.api?.deleteMessage;
+    if (!deleteMessage) return;
+    for (const id of ids) {
+      try {
+        await deleteMessage({ chat_id: this.chatId, message_id: id });
+      } catch {
+        // ignore
+      }
+    }
   }
 
   /** Add an inline fact-check indicator into the buffer. */
@@ -170,8 +198,55 @@ export class TelegramStreamWriter {
     this.flushTimer = null;
     if (this.isFinalized) return;
 
-    const text = this.buildSafeHtml();
-    if (!text || text === this.lastSentText) return;
+    const rawText = this.buildSafeHtml();
+    if (!rawText || rawText === this.lastSentText) return;
+
+    const remaining = rawText.slice(this.liveOffset);
+
+    // If uncommitted portion exceeds limit, commit a chunk as a live message.
+    // The full buffer is kept intact — only liveOffset advances.
+    if (remaining.length > TG_MSG_LIMIT) {
+      let splitPoint = TG_MSG_LIMIT;
+      for (let i = TG_MSG_LIMIT; i > TG_MSG_LIMIT * 0.5; i--) {
+        if (remaining[i] === "\n" && remaining[i + 1] === "\n") {
+          splitPoint = i;
+          break;
+        }
+        if (remaining[i] === "\n" && splitPoint === TG_MSG_LIMIT) {
+          splitPoint = i;
+        }
+      }
+      if (splitPoint === TG_MSG_LIMIT) {
+        const spaceIdx = remaining.lastIndexOf(" ", TG_MSG_LIMIT);
+        if (spaceIdx > TG_MSG_LIMIT * 0.5) splitPoint = spaceIdx;
+      }
+
+      const chunk = remaining.slice(0, splitPoint);
+      const closedChunk = closeUnclosedHtmlTags(chunk);
+
+      const sendMessage = this.bot.api?.sendMessage;
+      if (sendMessage) {
+        try {
+          const msg = await sendMessage({
+            chat_id: this.chatId,
+            text: closedChunk,
+            parse_mode: "HTML",
+          });
+          this.sentMessageIds.push(msg.message_id);
+          this.liveOffset += chunk.length;
+          this.lastSentText = rawText; // mark this version as sent
+          this.messageId = null; // next uncommitted portion creates a new placeholder
+          this.lastEditTime = Date.now();
+          this.onSuccess();
+        } catch (err) {
+          this.onError(err);
+        }
+      }
+      return;
+    }
+
+    // Normal path: close tags and edit the existing placeholder message
+    const text = closeUnclosedHtmlTags(remaining);
 
     const editMessageText = this.bot.api?.editMessageText;
     if (!editMessageText || !this.messageId) {
@@ -184,7 +259,7 @@ export class TelegramStreamWriter {
             parse_mode: "HTML",
           });
           this.messageId = msg.message_id;
-          this.lastSentText = text;
+          this.lastSentText = rawText;
           this.lastEditTime = Date.now();
           this.onSuccess();
         } catch (err) {
@@ -201,7 +276,7 @@ export class TelegramStreamWriter {
         text,
         parse_mode: "HTML",
       });
-      this.lastSentText = text;
+      this.lastSentText = rawText;
       this.lastEditTime = Date.now();
       this.onSuccess();
     } catch (err) {
@@ -234,24 +309,20 @@ export class TelegramStreamWriter {
   }
 
   /** Build safe HTML for live editing.
-   *  Removes <think> blocks, closes any unclosed tags so Telegram accepts the edit.
-   *  The raw buffer stays unchanged — AI continues inside open tags. */
+   *  Strips  think blocks, runs markdown→HTML (AI sometimes mixes markdown
+   *  into HTML output). Does NOT close tags or truncate — flush() handles that. */
   private buildSafeHtml(): string {
     let text = this.buffer.trim();
     if (!text) return this.placeholderText;
 
-    // Remove think tags (some models emit reasoning in <think>…</think>)
+    // Remove think tags (some models emit reasoning in  think blocks)
     text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
-    // Hard cap during streaming: never exceed Telegram limit so the edit succeeds.
-    // Closing tags may add a few chars, keep a small headroom.
-    const STREAM_CAP = TG_MSG_LIMIT - 80;
-    if (text.length > STREAM_CAP) {
-      text = text.slice(0, STREAM_CAP - 3) + "…";
-    }
+    // AI occasionally outputs markdown syntax (# headings, **bold**, etc.)
+    // even when instructed to use HTML only. Normalize it.
+    text = markdownToHtml(text);
 
-    // Close unclosed tags before sending to Telegram
-    return closeUnclosedHtmlTags(text);
+    return text;
   }
 
   async finalize(): Promise<void> {
@@ -265,6 +336,16 @@ export class TelegramStreamWriter {
 
     // Final flush of any remaining buffer
     await this.flush();
+
+    // Delete any live chunks that are still lingering before sending the final version
+    if (this.sentMessageIds.length > 0) {
+      const ids = [...this.sentMessageIds];
+      this.sentMessageIds = [];
+      await this.deleteChunkMessages(ids);
+    }
+
+    // Reset offset so the final send sees the full buffer, not just the remainder
+    this.liveOffset = 0;
 
     // Sanitize and chunk the final HTML
     await this.sendFinalHtml();
