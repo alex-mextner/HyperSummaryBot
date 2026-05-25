@@ -124,6 +124,7 @@ export class TelegramStreamWriter {
   replaceText(text: string): void {
     if (this.isFinalized) return;
     this.buffer = text;
+    this.lastSentText = ""; // force re-send, previous draft is irrelevant
     this.scheduleFlush();
   }
 
@@ -242,9 +243,11 @@ export class TelegramStreamWriter {
     // Remove think tags (some models emit reasoning in <think>…</think>)
     text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
-    // Hard cap during streaming (leave headroom for closing tags)
-    if (text.length > TG_MSG_LIMIT - 200) {
-      text = text.slice(0, TG_MSG_LIMIT - 203) + "...";
+    // Hard cap during streaming: never exceed Telegram limit so the edit succeeds.
+    // Closing tags may add a few chars, keep a small headroom.
+    const STREAM_CAP = TG_MSG_LIMIT - 80;
+    if (text.length > STREAM_CAP) {
+      text = text.slice(0, STREAM_CAP - 3) + "…";
     }
 
     // Close unclosed tags before sending to Telegram
@@ -270,12 +273,18 @@ export class TelegramStreamWriter {
 
   private async sendFinalHtml(): Promise<void> {
     const text = this.buffer.trim();
-    if (!text || text === this.placeholderText) return;
+    if (!text || text === this.placeholderText) {
+      console.warn("[stream] sendFinalHtml: empty or placeholder text, skipping");
+      return;
+    }
 
-    // Sanitize (strip non-allowed tags), close any remaining unclosed tags, chunk
+    // Sanitize (strip non-allowed tags). We do NOT close tags here — splitHtmlText
+    // will close them per-chunk so tag state stays correct across boundaries.
     let safeHtml = sanitizeTelegramHtml(text);
-    safeHtml = closeUnclosedHtmlTags(safeHtml);
     const chunks = splitHtmlText(safeHtml, TG_MSG_LIMIT);
+    console.log(
+      `[stream] sendFinalHtml: ${text.length} chars → ${chunks.length} chunk(s), lengths=[${chunks.map((c) => c.length).join(", ")}]`,
+    );
 
     const deleteMessage = this.bot.api?.deleteMessage;
     const sendMessage = this.bot.api?.sendMessage;
@@ -286,6 +295,7 @@ export class TelegramStreamWriter {
           chat_id: this.chatId,
           message_id: this.messageId,
         });
+        console.log(`[stream] Deleted placeholder ${this.messageId}`);
       } catch {
         // ignore
       }
@@ -298,6 +308,7 @@ export class TelegramStreamWriter {
     }
 
     const rateLimiter = new ChatRateLimiter(350);
+    let sentCount = 0;
     for (const chunk of chunks) {
       await rateLimiter.wait(this.chatId);
       for (let attempt = 0; attempt < 5; attempt++) {
@@ -307,6 +318,7 @@ export class TelegramStreamWriter {
             text: chunk,
             parse_mode: "HTML",
           });
+          sentCount++;
           break;
         } catch (error) {
           if (isTelegramRateLimit(error) && attempt < 4) {
@@ -314,14 +326,20 @@ export class TelegramStreamWriter {
             continue;
           }
           if (error instanceof Error && error.message.includes("parse")) {
+            console.warn(`[stream] Parse error on chunk ${sentCount + 1}, sending as plain text`);
             await sendMessage({ chat_id: this.chatId, text: chunk });
+            sentCount++;
             break;
           }
-          console.error("[stream] Failed to send final chunk:", error);
+          console.error(
+            `[stream] Failed to send final chunk ${sentCount + 1}/${chunks.length}:`,
+            error,
+          );
           break;
         }
       }
     }
+    console.log(`[stream] sendFinalHtml sent ${sentCount}/${chunks.length} chunks`);
   }
 
   private stopFlushTimer() {

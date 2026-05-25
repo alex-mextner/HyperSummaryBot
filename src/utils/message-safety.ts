@@ -160,9 +160,9 @@ export function splitHtmlText(html: string, maxLength: number = TG_MSG_LIMIT): s
       }
     }
 
-    const chunk = remaining.slice(0, splitPoint).trimEnd();
+    const chunk = remaining.slice(0, splitPoint);
     chunks.push(closeUnclosedHtmlTags(chunk));
-    remaining = remaining.slice(splitPoint).trimStart();
+    remaining = remaining.slice(splitPoint);
   }
 
   if (remaining) {
