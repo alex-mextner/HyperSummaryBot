@@ -34,12 +34,18 @@ export function startWebhookServer(bot: any): ReturnType<typeof Bun.serve> {
 
         try {
           const body = await req.json();
-          // Queue update and respond immediately — never block the webhook response
-          // on long-running handlers (summary, ask, etc.)
-          bot.updates.queue.add(body);
+          // Handle update asynchronously — respond 200 immediately so Telegram
+          // doesn't retry while we process long-running handlers (summary, etc.)
+          void (async () => {
+            try {
+              await bot.updates.handleUpdate(body);
+            } catch (err) {
+              console.error("[webhook] Failed to handle update:", err);
+            }
+          })();
           return jsonResponse({ ok: true });
         } catch (err) {
-          console.error("[webhook] Failed to queue update:", err);
+          console.error("[webhook] Failed to parse request:", err);
           return jsonResponse({ error: "Bad request" }, 400);
         }
       }
