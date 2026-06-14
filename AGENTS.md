@@ -1,5 +1,13 @@
 # AGENTS.md — HyperSummaryBot
 
+> **Portable dev rules live in the global agent-tools skills:**
+> github.com/alex-mextner/agent-tools (`skills/universal/` + `skills/by-type/bot`).
+> They cover the generic discipline this file used to spell out — gramio handler ordering,
+> loadConfig-not-singleton, multi-provider AI fallback, no type escape hatches, no silent
+> fallbacks, atomic commits, pre-commit gate, AI review before commit, telegram API limits,
+> telegram tone-of-voice. This file keeps only what is **specific to HyperSummaryBot**
+> (its architecture, file paths, commands, deploy, infra). Read both.
+
 ## Project Overview
 Telegram group chat summary bot with AI-powered analysis.
 Multi-agent system for different summary types and note extraction.
@@ -13,7 +21,10 @@ Multi-agent system for different summary types and note extraction.
 - **Testing:** `bun:test` (Jest-compatible)
 - **Deploy:** DigitalOcean + PM2 + GitHub Actions
 
-## Handler Ordering Rules (Критично!)
+## Handler Ordering Rules
+
+> Generic principle in global skill `bot/gramio-handler-ordering`. Concrete order for THIS
+> bot below.
 
 In GramIO, **handler order matters**. First matching handler processes the message.
 
@@ -72,16 +83,16 @@ In GramIO, **handler order matters**. First matching handler processes the messa
 - `camelCase` for functions and variables
 
 ## Code Conventions
+
+> Generic typing/error rules in global skills `no-type-escape-hatches` (no `any`/`as any`/
+> `as never`; `unknown` + guards) and `backend/no-silent-fallbacks` (no silent `catch`, no
+> silent optional-dependency guards — log or explain). Project-specific deltas:
+
 - Strict TypeScript: `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`
 - `verbatimModuleSyntax` — use `import type` for type-only imports
-- No `any`. Use `unknown` + type guards (zod if needed)
-- Error handling: never silently swallow. Log and re-throw or return structured error
 - AI calls: always wrap in try/catch with fallback to next provider
 - Database: parameterized queries only (Drizzle handles this)
 - Never commit `.env`. `.env.example` is the source of truth
-- No `as any` / `as never` casts in production code
-- No silent `catch` blocks — every catch must log or explain why swallowing is safe
-- No silent optional-dependency guards — fail explicitly or warn + agentHint
 
 ## Error Handling
 
@@ -103,26 +114,16 @@ In GramIO, **handler order matters**. First matching handler processes the messa
 
 ## Git Workflow
 
-**Mandatory before every commit (4-stage review, NEVER skip even if user says "commit"):**
+> Generic discipline in global skills `atomic-commits`, `pre-commit-gate`,
+> `ai-review-before-commit` (one logical change per commit; never `git add -A` blind; green
+> tree before the commit hash; codex review every commit, document `[skip-codex] reason` when
+> unavailable; never commit on the user's behalf without permission). HyperSummaryBot's
+> concrete 4-stage gate (NEVER skip even if the user says "commit"):
 
 1. **Self-review** — read your diff (`git diff --staged`), question every line
 2. **Type-check + lint** — `bun x tsc --noEmit` + `bun run lint` must pass clean (zero errors, zero warnings)
 3. **Codex AI review** — `codex exec review --uncommitted` → address every real issue
 4. **Tests** — `bun test` (or scoped subset) must pass green
-
-**If codex CLI is unavailable:** skip step 3 but do NOT skip the self-review in step 1. Codex is a sanity check, not a rubber stamp.
-
-**Atomic commits:** one logical change = one commit. Never batch unrelated changes. Each commit must leave the tree green (type-check + lint + tests pass).
-
-**Never `git add -A`** without checking `git status` first.
-
-### Atomic Commits & Codex Review Policy
-
-- **One logical change = one commit.** Batching unrelated fixes into a single commit is forbidden.
-- **Codex review is mandatory** for every commit. Run `codex exec review --uncommitted` and address every P1/P2 issue before staging.
-- If codex is unavailable, document this in the commit message (`[skip-codex] reason`) and double the self-review rigor.
-- **Green tree rule:** `tsc --noEmit`, `oxlint`, and `bun test` must all pass with zero failures before the commit hash is created.
-- **Never commit on behalf of the user** without explicit permission after the review cycle.
 
 **Pre-commit hooks:** lint-staged runs oxfmt + oxlint automatically.
 
@@ -145,21 +146,15 @@ In GramIO, **handler order matters**. First matching handler processes the messa
 
 ## Tone of Voice (bot messages)
 
-All user-facing bot messages must follow these rules:
-
-- Address the user as **"ты"** (informal singular), never "вы"
-- Speak directly to the person: "Ты получишь саммари", not "Пользователь получит"
-- Frame features as user benefit, not technical capability
-- **Front-load the essence** — first two words must be the most informative
-- Don't instruct the user to do what the system does automatically
-- Drop filler words — shorter is better
+> Portable: global skill `bot/telegram-tone-of-voice` — address the user as informal "ты",
+> speak directly to the person, frame features as user benefit, front-load the essence,
+> drop filler, don't instruct the user to do what the system already does automatically.
 
 ## Telegram Bot API Limits
-- **Message**: 4096 chars. Split when may exceed.
-- **Caption**: 1024 chars (silently fails for non-Premium)
-- **callback_data**: 64 bytes
-- **Rate**: ~30 msg/sec global, ~1/sec per chat
-- **Entities**: max 100 per message
+
+> Portable: global skill `bot/telegram-api-limits` — message 4096 chars (split when over),
+> caption 1024 (silently fails for non-Premium), callback_data 64 bytes, rate ~30 msg/sec
+> global / ~1/sec per chat, max 100 entities per message.
 
 ## Deployment
 - **Host**: 104.248.84.190 (DigitalOcean)
