@@ -103,6 +103,11 @@ In GramIO, **handler order matters**. First matching handler processes the messa
 
 ## Git Workflow
 
+> Generic commit discipline — atomic commits, AI-review-before-commit, and the green
+> pre-commit gate — is provisioned by the universal `atomic-commits`,
+> `ai-review-before-commit`, and `pre-commit-gate` skills via `rig` (see `rig.yaml`). The
+> project-specific commands and the codex `[skip-codex]` policy below are retained.
+
 **Mandatory before every commit (4-stage review, NEVER skip even if user says "commit"):**
 
 1. **Self-review** — read your diff (`git diff --staged`), question every line
