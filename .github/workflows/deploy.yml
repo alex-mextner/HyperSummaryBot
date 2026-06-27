@@ -5,12 +5,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Limit GITHUB_TOKEN to read-only for all jobs (this workflow only reads the repo and
+# deploys over SSH with separate secrets — it never needs to write via the token).
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
       - run: bun install
@@ -25,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Deploy to DO
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f # v1.2.2
         with:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USER }}
