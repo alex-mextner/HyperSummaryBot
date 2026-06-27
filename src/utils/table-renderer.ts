@@ -83,8 +83,12 @@ function escapePre(text: string): string {
 /** Convert markdown tables (| col1 | col2 |) to <pre> ASCII tables.
  *  Handles header separator lines (|---|---|). */
 export function markdownTableToHtml(text: string): string {
-  // Match markdown table blocks: lines starting with |
-  const tableRegex = /^(\|.*\|)[ \t]*(?:\n\|?[\s\-:|]+\|?)[ \t]*(?:\n\|.*\|.*)*$/gm;
+  // Match markdown table blocks: a header row, a separator row, then data rows.
+  // Each sub-pattern uses a single unambiguous quantifier (no overlapping `.*` pairs and
+  // no newline-matching `\s` in the separator class) so the engine can't backtrack
+  // super-linearly on adversarial input (CodeQL js/redos) — the input here is LLM/markdown
+  // output, i.e. untrusted.
+  const tableRegex = /^(\|[^\n]*\|)[ \t]*(?:\n\|?[ \t\-:|]+\|?)[ \t]*(?:\n\|[^\n|]*\|[^\n]*)*$/gm;
 
   return text.replace(tableRegex, (block) => {
     const lines = block.split("\n").filter((l) => l.trim());
