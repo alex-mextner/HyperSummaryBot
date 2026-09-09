@@ -1,0 +1,6 @@
+version: 1
+# Repo-local Oxc policy so Rig provisions anti-slop + oxlint.config.ts.
+linters:
+  enabled: true
+  preview: true
+  rules: {}
