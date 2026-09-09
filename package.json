@@ -30,12 +30,14 @@
     "telegramify-markdown": "latest"
   },
   "devDependencies": {
+    "@oxlint/plugins": "^1.82.0",
     "@types/bun": "latest",
-    "typescript": "^5",
-    "oxlint": "latest",
-    "oxfmt": "latest",
     "husky": "latest",
-    "lint-staged": "latest"
+    "lint-staged": "latest",
+    "oxfmt": "latest",
+    "oxlint": "latest",
+    "oxlint-tsgolint": "^7.0.2001",
+    "typescript": "^5"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
