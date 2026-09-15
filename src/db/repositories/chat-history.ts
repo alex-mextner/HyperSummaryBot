@@ -64,6 +64,13 @@ export class ChatHistoryRepository {
       .where(and(eq(messages.chatId, chatId), eq(messages.messageId, messageId)));
   }
 
+  async deleteByMessageIds(chatId: number, messageIds: number[]): Promise<void> {
+    if (messageIds.length === 0) return;
+    await this.db
+      .delete(messages)
+      .where(and(eq(messages.chatId, chatId), inArray(messages.messageId, messageIds)));
+  }
+
   async getRecent(chatId: number, limit: number = 50): Promise<ChatMessage[]> {
     const rows = await this.db
       .select()

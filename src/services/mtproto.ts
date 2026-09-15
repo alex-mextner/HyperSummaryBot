@@ -1,4 +1,4 @@
-import { TelegramClient } from "@mtcute/bun";
+import { TelegramClient, type DeleteMessageUpdate, type Message } from "@mtcute/bun";
 import { loadConfig } from "../config/env";
 import { MAX_CHAT_HISTORY } from "../config/constants";
 import type { ChatHistoryRepository } from "../db/repositories/chat-history";
@@ -377,85 +377,120 @@ export async function getCommonGroups(
   return groups;
 }
 
+let activeRealtimeDispose: (() => void) | null = null;
+
+function formatRealtimeSender(message: Message): string | null {
+  const sender = message.sender;
+  if (!sender) return null;
+  const username = sender.username;
+  return username ? `${sender.displayName} @${username}` : sender.displayName;
+}
+
+async function persistRealtimeMessage(
+  chatHistoryRepo: ChatHistoryRepository,
+  allowedChatIds: ReadonlySet<number>,
+  message: Message,
+): Promise<void> {
+  const chat = message.chat;
+  if (chat.type !== "chat") return;
+  const chatId = chat.id;
+  if (!allowedChatIds.has(chatId)) return;
+
+  const userName = formatRealtimeSender(message);
+  await chatHistoryRepo.save({
+    chatId,
+    messageId: message.id,
+    userId: message.sender.id,
+    userName,
+    role: "user",
+    content: message.text || "[Media/Empty]",
+    replyToMessageId: message.replyToMessage?.id ?? null,
+    forwardFromName: message.forward?.sender.displayName ?? null,
+  });
+
+  console.log(`[MTProto] Synced message ${message.id} from chat ${chatId}`);
+}
+
+async function deleteRealtimeMessages(
+  chatHistoryRepo: ChatHistoryRepository,
+  allowedChatIds: ReadonlySet<number>,
+  update: DeleteMessageUpdate,
+): Promise<void> {
+  const chatId = update.channelId;
+  if (chatId === null) {
+    console.warn(
+      "[mtproto] Delete update skipped: source chat is unavailable for non-channel delete",
+    );
+    return;
+  }
+  if (!allowedChatIds.has(chatId)) return;
+  await chatHistoryRepo.deleteByMessageIds(chatId, update.messageIds);
+  console.log(`[MTProto] Deleted ${update.messageIds.length} message(s) from chat ${chatId}`);
+}
+
 export async function startRealtimeSync(
   chatHistoryRepo: ChatHistoryRepository,
   allowedChatIds: ReadonlySet<number>,
 ): Promise<() => void> {
+  activeRealtimeDispose?.();
+  activeRealtimeDispose = null;
+
   if (allowedChatIds.size === 0) {
     console.warn("[mtproto] Real-time sync skipped: source allowlist is empty");
     return () => {};
   }
+
   const client = getClient();
+  let active = true;
+
+  const onNewMessage = async (message: Message): Promise<void> => {
+    if (!active) return;
+    try {
+      await persistRealtimeMessage(chatHistoryRepo, allowedChatIds, message);
+    } catch (error) {
+      console.error("[mtproto] Failed to persist new message:", error);
+    }
+  };
+  const onEditMessage = async (message: Message): Promise<void> => {
+    if (!active) return;
+    try {
+      await persistRealtimeMessage(chatHistoryRepo, allowedChatIds, message);
+    } catch (error) {
+      console.error("[mtproto] Failed to persist edited message:", error);
+    }
+  };
+  const onDeleteMessage = async (update: DeleteMessageUpdate): Promise<void> => {
+    if (!active) return;
+    try {
+      await deleteRealtimeMessages(chatHistoryRepo, allowedChatIds, update);
+    } catch (error) {
+      console.error("[mtproto] Failed to apply delete update:", error);
+    }
+  };
+
+  client.onNewMessage.add(onNewMessage);
+  client.onEditMessage.add(onEditMessage);
+  client.onDeleteMessage.add(onDeleteMessage);
+
+  const dispose = (): void => {
+    if (!active) return;
+    active = false;
+    client.onNewMessage.remove(onNewMessage);
+    client.onEditMessage.remove(onEditMessage);
+    client.onDeleteMessage.remove(onDeleteMessage);
+    if (activeRealtimeDispose === dispose) activeRealtimeDispose = null;
+  };
+  activeRealtimeDispose = dispose;
 
   try {
     await client.start();
   } catch {
+    dispose();
     console.warn("[mtproto] Real-time sync skipped: client not authenticated yet");
     return () => {};
   }
 
-  // Listen for new messages via MTProto updates
-  const handler = async (update: unknown) => {
-    const u = update as Record<string, unknown>;
-    if (u._ !== "updateNewChannelMessage" && u._ !== "updateNewMessage") return;
-
-    const msg = u.message as Record<string, unknown> | undefined;
-    if (!msg || msg._ !== "message") return;
-
-    const peerId = msg.peerId as Record<string, unknown> | undefined;
-    if (peerId?.userId !== undefined) return;
-    const rawChatId = (peerId?.channelId ?? peerId?.chatId) as number | undefined;
-    if (!rawChatId) return;
-
-    const isChannel = peerId?.channelId !== undefined;
-    const dbChatId = isChannel ? -1000000000000 - Number(rawChatId) : -Number(rawChatId);
-    if (!allowedChatIds.has(dbChatId)) return;
-    const msgId = msg.id as number;
-
-    // Check if already exists (fast dedup)
-    const exists = await chatHistoryRepo.checkExists(dbChatId, msgId);
-    if (exists) return;
-
-    const fromId = msg.fromId as Record<string, unknown> | undefined;
-    const replyTo = msg.replyTo as Record<string, unknown> | undefined;
-    const fwdFrom = msg.fwdFrom as Record<string, unknown> | undefined;
-
-    // Save new message
-    await chatHistoryRepo.save({
-      chatId: dbChatId,
-      messageId: msgId,
-      userId: (fromId?.userId ?? fromId?.channelId ?? 0) as number,
-      userName: fromId ? String(fromId.userId || fromId.channelId) : null,
-      role: "user",
-      content: (msg.message as string) || "[Media/Empty]",
-      replyToMessageId: (replyTo?.replyToMsgId as number) || null,
-      forwardFromName: fwdFrom ? String(fwdFrom.fromId || "Forwarded") : null,
-    });
-
-    console.log(`[MTProto] Synced message ${msgId} from chat ${rawChatId} (dbChatId=${dbChatId})`);
-  };
-
-  // mtcute uses Emitter for updates (object with .add(), not function)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const c = client as any;
-  let active = true;
-  const wrappedHandler = (update: unknown) => {
-    if (!active) return;
-    return handler(update);
-  };
-
-  if (c.onUpdate?.add) {
-    c.onUpdate.add(wrappedHandler);
-  } else if (c.updates?.on) {
-    c.updates.on("raw", wrappedHandler);
-  }
-
-  return () => {
-    active = false;
-    // mtcute cleanup if available
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (client as any).updates?.off?.("raw", wrappedHandler);
-  };
+  return dispose;
 }
 
 export async function isMtProtoConfigured(): Promise<boolean> {
