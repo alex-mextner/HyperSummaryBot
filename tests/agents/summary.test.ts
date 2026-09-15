@@ -53,6 +53,20 @@ describe("generateSummary", () => {
     expect(capturedParams.temperature).toBe(0.2);
   });
 
+  test("exposes only read-only summary tools", async () => {
+    await generateSummary({
+      chatId: 1,
+      messages: [{ userId: 1, userName: "Alice", content: "I owe Bob 10 EUR" }],
+      bot: createMockBot() as any,
+    });
+
+    const toolNames = (capturedParams.tools ?? []).map((tool: any) => tool.function?.name);
+    expect(toolNames).toEqual(["render_table"]);
+    expect(toolNames).not.toContain("track_debt");
+    expect(toolNames).not.toContain("settle_debt");
+    expect(capturedParams.messages[0].content).toContain("не должны изменять состояние");
+  });
+
   test("includes formatted messages with user lookup", async () => {
     await generateSummary({
       chatId: 1,

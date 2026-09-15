@@ -235,7 +235,6 @@ bot.command(
           messageId: m.messageId,
         })),
         bot,
-        debtTracker,
         placeholderText: `📊 Анализирую ${messages.length} сообщений…`,
       });
     } catch (error) {
