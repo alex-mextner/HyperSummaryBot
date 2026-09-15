@@ -16,8 +16,31 @@ import {
 import { handleConnectAccount } from "./bot/connect-account";
 import { resolveDMChat, toBotApiChatId } from "./bot/dm-chat-resolver";
 import { DebtTracker } from "./services/debt-tracker";
+import { createAccessPolicy } from "./security/access-policy";
 
 const config = loadConfig();
+const accessPolicy = createAccessPolicy({
+  ownerUserId: config.BOT_ADMIN_ID,
+  allowedChatIds: config.ALLOWED_CHAT_IDS,
+});
+const allowedChatIds = accessPolicy.allowedChatIds;
+
+interface AccessContext {
+  from?: { id: number };
+  reply: (text: string) => Promise<unknown>;
+}
+
+async function requireOwner(ctx: AccessContext): Promise<boolean> {
+  if (accessPolicy.isOwner(ctx.from?.id)) return true;
+  await ctx.reply("⛔ Доступ ограничен.");
+  return false;
+}
+
+async function requireAllowedSource(ctx: AccessContext, chatId: number): Promise<boolean> {
+  if (accessPolicy.isAllowedChat(chatId)) return true;
+  await ctx.reply("⛔ Доступ ограничен.");
+  return false;
+}
 /** Universal command error wrapper: catches ANY error, logs it, replies to user.
  *  Generic — preserves GramIO derived context type so .chatHistory etc stay typed. */
 function safeCommand<TContext extends { reply: (text: string) => Promise<unknown> }>(
@@ -52,7 +75,9 @@ const knownGroupIds = new Set<number>();
 async function loadKnownGroupIds(): Promise<void> {
   try {
     const ids = await chatHistory.getAllChatIds();
-    for (const id of ids) knownGroupIds.add(id);
+    for (const id of ids) {
+      if (accessPolicy.isAllowedChat(id)) knownGroupIds.add(id);
+    }
     console.log(
       `📋 Pre-loaded ${knownGroupIds.size} known chats from DB`,
       Array.from(knownGroupIds),
@@ -64,18 +89,26 @@ async function loadKnownGroupIds(): Promise<void> {
 
 /** One-time import on startup for already-connected MTProto accounts */
 async function runInitialImport(): Promise<void> {
+  if (!accessPolicy.isConfigured()) {
+    console.warn("[startup] Initial import skipped: access policy is not configured");
+    return;
+  }
   try {
     const { getCommonGroups, importChatHistory } = await import("./services/mtproto");
-    const groups = await getCommonGroups(config.BOT_USERNAME);
-    console.log(`[startup] Found ${groups.length} common groups with bot`);
+    const groups = (await getCommonGroups(config.BOT_USERNAME)).filter((group) =>
+      accessPolicy.isAllowedChat(toBotApiChatId(group.id, group.type)),
+    );
+    console.log(`[startup] Found ${groups.length} allowlisted common groups with bot`);
 
     for (const group of groups) {
-      knownGroupIds.add(group.id);
+      const sourceChatId = toBotApiChatId(group.id, group.type);
+      knownGroupIds.add(sourceChatId);
       try {
         const result = await importChatHistory(chatHistory, group.id, {
           limit: MAX_CHAT_HISTORY,
           type: group.type,
           accessHash: group.accessHash,
+          allowedChatIds,
         });
         console.log(
           `[startup] Imported ${result.imported} messages from ${group.title} (${group.id})`,
@@ -150,11 +183,12 @@ bot.command(
   safeCommand("summary", async (ctx) => {
     const chat = ctx.chat;
     if (!chat) return;
+    if (!(await requireOwner(ctx))) return;
 
     let targetChatId: number;
 
     if (chat.type === "private") {
-      const choice = await resolveDMChat(ctx);
+      const choice = await resolveDMChat(ctx, allowedChatIds);
       if (!choice) return;
       targetChatId = choice.chatId;
     } else if (chat.type === "group" || chat.type === "supergroup") {
@@ -163,6 +197,7 @@ bot.command(
       await ctx.reply("Команда работает в группах и личных сообщениях.");
       return;
     }
+    if (!(await requireAllowedSource(ctx, targetChatId))) return;
 
     try {
       const allMessages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
@@ -212,6 +247,7 @@ bot.command(
   safeCommand("ask", async (ctx) => {
     const chat = ctx.chat;
     if (!chat) return;
+    if (!(await requireOwner(ctx))) return;
 
     const question = parseAskQuestion(ctx.text || "");
     if (!question.trim()) {
@@ -225,7 +261,7 @@ bot.command(
     let targetChatId: number;
 
     if (chat.type === "private") {
-      const choice = await resolveDMChat(ctx);
+      const choice = await resolveDMChat(ctx, allowedChatIds);
       if (!choice) return;
       targetChatId = choice.chatId;
     } else if (chat.type === "group" || chat.type === "supergroup") {
@@ -234,6 +270,7 @@ bot.command(
       await ctx.reply("Команда работает в группах и личных сообщениях.");
       return;
     }
+    if (!(await requireAllowedSource(ctx, targetChatId))) return;
 
     await ctx.reply("🤔 Анализирую вопрос...");
 
@@ -274,11 +311,12 @@ bot.command(
   safeCommand("search", async (ctx) => {
     const chat = ctx.chat;
     if (!chat) return;
+    if (!(await requireOwner(ctx))) return;
 
     let targetChatId: number;
 
     if (chat.type === "private") {
-      const choice = await resolveDMChat(ctx);
+      const choice = await resolveDMChat(ctx, allowedChatIds);
       if (!choice) return;
       targetChatId = choice.chatId;
     } else if (chat.type === "group" || chat.type === "supergroup") {
@@ -287,6 +325,7 @@ bot.command(
       await ctx.reply("Команда работает в группах и личных сообщениях.");
       return;
     }
+    if (!(await requireAllowedSource(ctx, targetChatId))) return;
 
     const query = parseSearchQuery(ctx.text || "");
     if (!query.trim()) {
@@ -325,6 +364,7 @@ bot.command(
   safeCommand("note", async (ctx) => {
     const chat = ctx.chat;
     if (!chat) return;
+    if (!(await requireOwner(ctx))) return;
 
     const { isNotionConfigured } = await import("./services/notion");
     if (!isNotionConfigured()) {
@@ -347,7 +387,7 @@ bot.command(
     let targetChatId: number;
 
     if (chat.type === "private") {
-      const choice = await resolveDMChat(ctx);
+      const choice = await resolveDMChat(ctx, allowedChatIds);
       if (!choice) return;
       targetChatId = choice.chatId;
     } else if (chat.type === "group" || chat.type === "supergroup") {
@@ -356,6 +396,7 @@ bot.command(
       await ctx.reply("Команда работает в группах и личных сообщениях.");
       return;
     }
+    if (!(await requireAllowedSource(ctx, targetChatId))) return;
 
     await ctx.reply("📝 Анализирую сообщения и извлекаю заметку…");
 
@@ -410,6 +451,7 @@ bot.command(
 bot.command(
   "connect_notion",
   safeCommand("connect_notion", async (ctx) => {
+    if (!(await requireOwner(ctx))) return;
     const chat = ctx.chat;
     if (!chat || chat.type !== "private") {
       await ctx.reply("Эта команда работает только в личных сообщениях.");
@@ -468,6 +510,7 @@ bot.command(
   safeCommand("digest", async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
+    if (!(await requireOwner(ctx))) return;
 
     await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
   }),
@@ -478,10 +521,11 @@ bot.command(
   safeCommand("debts", async (ctx) => {
     const chat = ctx.chat;
     if (!chat) return;
+    if (!(await requireOwner(ctx))) return;
 
     let targetChatId: number;
     if (chat.type === "private") {
-      const choice = await resolveDMChat(ctx);
+      const choice = await resolveDMChat(ctx, allowedChatIds);
       if (!choice) return;
       targetChatId = choice.chatId;
     } else if (chat.type === "group" || chat.type === "supergroup") {
@@ -490,6 +534,7 @@ bot.command(
       await ctx.reply("Команда работает в группах и личных сообщениях.");
       return;
     }
+    if (!(await requireAllowedSource(ctx, targetChatId))) return;
 
     try {
       const activeDebts = await debtTracker.getActiveDebts(targetChatId);
@@ -627,8 +672,10 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     // Auto-import history from common groups (where both user and bot are members)
     console.log("[connect_account] fetching common groups...");
     const { getCommonGroups, importChatHistory } = await import("./services/mtproto");
-    const groups = await getCommonGroups(config.BOT_USERNAME);
-    console.log("[connect_account] common groups count:", groups.length);
+    const groups = (await getCommonGroups(config.BOT_USERNAME)).filter((group) =>
+      accessPolicy.isAllowedChat(toBotApiChatId(group.id, group.type)),
+    );
+    console.log("[connect_account] allowlisted common groups count:", groups.length);
 
     if (groups.length === 0) {
       await ctx.reply(
@@ -640,12 +687,14 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
       let importedCount = 0;
 
       for (const group of groups) {
-        knownGroupIds.add(group.id);
+        const sourceChatId = toBotApiChatId(group.id, group.type);
+        knownGroupIds.add(sourceChatId);
         try {
           const result = await importChatHistory(chatHistory, group.id, {
             limit: MAX_CHAT_HISTORY,
             type: group.type,
             accessHash: group.accessHash,
+            allowedChatIds,
           });
           importedCount += result.imported;
           console.log(
@@ -667,7 +716,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
     (async () => {
       try {
         const { startRealtimeSync } = await import("./services/mtproto");
-        const dispose = await startRealtimeSync(chatHistory);
+        const dispose = await startRealtimeSync(chatHistory, allowedChatIds);
         if (dispose.toString() !== "() => {}") {
           console.log("📡 MTProto real-time sync started after auth");
         }
@@ -691,6 +740,7 @@ async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promis
 bot.command(
   "connect_account",
   safeCommand("connect_account", async (ctx) => {
+    if (!(await requireOwner(ctx))) return;
     console.log("[connect_account] command handler triggered", {
       userId: ctx.from?.id,
       chatId: ctx.chat?.id,
@@ -718,7 +768,7 @@ bot.on("message", async (ctx) => {
 
   const text = ctx.text || "";
   const userId = ctx.from?.id;
-  if (!userId) return;
+  if (!userId || !accessPolicy.isOwner(userId)) return;
 
   // Check if user has a pending 2FA password promise
   const pendingPass = pendingPasswords.get(userId);
@@ -859,6 +909,10 @@ bot.on("my_chat_member", async (ctx) => {
     console.log("[my_chat_member] skipped: not a group");
     return;
   }
+  if (!accessPolicy.isAllowedChat(chat.id)) {
+    console.log("[my_chat_member] skipped: source not allowlisted");
+    return;
+  }
 
   // Bot was just added to the group (or became admin)
   if (oldStatus !== "member" && newStatus === "member") {
@@ -870,9 +924,12 @@ bot.on("my_chat_member", async (ctx) => {
       // Silent import in background
       (async () => {
         try {
-          await importChatHistory(chatHistory, chat.id, {
+          const mtprotoChatId =
+            chat.type === "supergroup" ? Math.abs(chat.id + 1000000000000) : Math.abs(chat.id);
+          await importChatHistory(chatHistory, mtprotoChatId, {
             limit: MAX_CHAT_HISTORY,
             type: chat.type === "supergroup" ? "channel" : "group",
+            allowedChatIds,
           });
         } catch (error) {
           console.error("Summary error:", error);
@@ -906,6 +963,10 @@ bot.on("callback_query", async (ctx) => {
   const c = ctx as any;
   const data = c.callbackQuery?.data || "";
   if (!data.startsWith("select_chat:")) return;
+  if (!accessPolicy.isOwner(c.from?.id)) {
+    await c.answerCallbackQuery("⛔ Недоступно");
+    return;
+  }
 
   const [, rawId, type] = data.split(":");
   const mtprotoId = Number(rawId);
@@ -915,6 +976,10 @@ bot.on("callback_query", async (ctx) => {
   }
 
   const chatId = toBotApiChatId(mtprotoId, type as "group" | "channel");
+  if (!accessPolicy.isAllowedChat(chatId)) {
+    await c.answerCallbackQuery("⛔ Недоступно");
+    return;
+  }
   const session = c.session as Record<string, unknown>;
   session.selectedChatId = chatId;
 
@@ -938,6 +1003,11 @@ bot.on("callback_query", async (ctx) => {
 bot.on("callback_query", async (ctx) => {
   const c = ctx as any;
   const data = c.callbackQuery?.data || "";
+  if (!data.startsWith("select_notion_db:") && data !== "create_notion_db_prompt") return;
+  if (!accessPolicy.isOwner(c.from?.id)) {
+    await c.answerCallbackQuery("⛔ Недоступно");
+    return;
+  }
 
   if (data.startsWith("select_notion_db:")) {
     const [, dbId] = data.split(":");
@@ -969,7 +1039,7 @@ bot.on("callback_query", async (ctx) => {
 
 // Handle file uploads for chat dump import
 bot.on("message", async (ctx) => {
-  if (!ctx.chat) return;
+  if (!ctx.chat || !accessPolicy.isOwner(ctx.from?.id)) return;
 
   const fileName = ctx.document?.fileName?.toLowerCase() || "";
   if (fileName.endsWith(".json") || fileName.endsWith(".csv")) {
@@ -985,8 +1055,9 @@ bot.on("message", async (ctx) => {
   // Skip bot's own messages — don't pollute chat history with placeholders and summaries
   if (ctx.from?.id && botUserId && ctx.from.id === botUserId) return;
 
-  // Only process group chats
+  // Only process allowlisted group chats
   if (chat.type !== "group" && chat.type !== "supergroup") return;
+  if (!accessPolicy.isAllowedChat(chat.id)) return;
   knownGroupIds.add(chat.id);
 
   const content = buildMessageContent({
@@ -1078,6 +1149,9 @@ async function registerBotCommands() {
 // Start bot
 async function main() {
   console.log(`🚀 Starting ${config.BOT_USERNAME}...`);
+  if (!accessPolicy.isConfigured()) {
+    console.warn("[security] owner/source allowlist is not configured; data access is disabled");
+  }
 
   // Load known groups from DB before any imports run
   await loadKnownGroupIds();
@@ -1112,7 +1186,7 @@ async function main() {
     (async () => {
       try {
         const { startRealtimeSync } = await import("./services/mtproto");
-        const dispose = await startRealtimeSync(chatHistory);
+        const dispose = await startRealtimeSync(chatHistory, allowedChatIds);
         if (dispose.toString() !== "() => {}") {
           console.log("📡 MTProto real-time sync started");
         }

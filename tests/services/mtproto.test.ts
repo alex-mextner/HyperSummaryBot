@@ -32,6 +32,7 @@ import {
 } from "../../src/services/mtproto";
 
 describe("MTProto service", () => {
+  const allowedChatIds = new Set<number>([-1, -1000000000002]);
   let db: Database;
   let repo: ChatHistoryRepository;
 
@@ -62,7 +63,7 @@ describe("MTProto service", () => {
   });
 
   test("importChatHistory returns imported and skipped counts", async () => {
-    const result = await importChatHistory(repo, 1, { limit: 10 });
+    const result = await importChatHistory(repo, 1, { limit: 10, allowedChatIds });
     expect(typeof result.imported).toBe("number");
     expect(typeof result.skipped).toBe("number");
     expect(result.imported).toBe(0);
@@ -89,7 +90,7 @@ describe("MTProto service", () => {
       return {};
     });
 
-    const result = await importChatHistory(repo, 1, { limit: 5 });
+    const result = await importChatHistory(repo, 1, { limit: 5, allowedChatIds });
     expect(result.imported + result.skipped).toBeGreaterThan(0);
   });
 
@@ -123,8 +124,14 @@ describe("MTProto service", () => {
       return {};
     });
 
-    const result = await importChatHistory(repo, 1, { limit: 10 });
+    const result = await importChatHistory(repo, 1, { limit: 10, allowedChatIds });
     expect(result.skipped).toBeGreaterThan(0);
+  });
+
+  test("importChatHistory rejects a source outside the allowlist", async () => {
+    await expect(importChatHistory(repo, 2, { limit: 10, allowedChatIds })).rejects.toThrow(
+      "not allowlisted",
+    );
   });
 
   test("getUserGroups returns group list", async () => {
@@ -151,18 +158,18 @@ describe("MTProto service", () => {
   });
 
   test("startRealtimeSync returns dispose function", async () => {
-    const dispose = await startRealtimeSync(repo);
+    const dispose = await startRealtimeSync(repo, allowedChatIds);
     expect(typeof dispose).toBe("function");
     expect(() => dispose()).not.toThrow();
   });
 
   test("startRealtimeSync attaches update handler", async () => {
-    await startRealtimeSync(repo);
+    await startRealtimeSync(repo, allowedChatIds);
     expect(sharedMockClient.updates.on.mock.calls.length).toBeGreaterThan(0);
   });
 
   test("update handler saves new messages", async () => {
-    await startRealtimeSync(repo);
+    await startRealtimeSync(repo, allowedChatIds);
     const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
     expect(typeof handler).toBe("function");
 
@@ -183,6 +190,50 @@ describe("MTProto service", () => {
     expect(recent.some((m) => m.messageId === 999)).toBe(true);
   });
 
+  test("realtime sync never persists private dialogs even on numeric collision", async () => {
+    const collisionAllowlist = new Set<number>([-42]);
+    await startRealtimeSync(repo, collisionAllowlist);
+    const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
+
+    await handler({
+      _: "updateNewMessage",
+      message: {
+        _: "message",
+        id: 1002,
+        peerId: { userId: 42 },
+        fromId: { userId: 42 },
+        message: "Private message",
+      },
+    });
+
+    expect(await repo.getRecent(-42, 10)).toHaveLength(0);
+  });
+
+  test("empty source allowlist does not start the MTProto client", async () => {
+    const startsBefore = sharedMockClient.start.mock.calls.length;
+    const dispose = await startRealtimeSync(repo, new Set());
+    expect(sharedMockClient.start.mock.calls.length).toBe(startsBefore);
+    expect(typeof dispose).toBe("function");
+  });
+
+  test("realtime sync ignores a source outside the allowlist", async () => {
+    await startRealtimeSync(repo, allowedChatIds);
+    const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
+
+    await handler({
+      _: "updateNewMessage",
+      message: {
+        _: "message",
+        id: 1001,
+        peerId: { chatId: 2 },
+        fromId: { userId: 42 },
+        message: "Should not persist",
+      },
+    });
+
+    expect(await repo.getRecent(-2, 10)).toHaveLength(0);
+  });
+
   test("update handler dedups existing messages", async () => {
     await repo.save({
       chatId: -1,
@@ -195,7 +246,7 @@ describe("MTProto service", () => {
       forwardFromName: null,
     });
 
-    await startRealtimeSync(repo);
+    await startRealtimeSync(repo, allowedChatIds);
     const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
 
     await handler({

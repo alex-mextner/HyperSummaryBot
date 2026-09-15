@@ -45,9 +45,9 @@ describe("MTProto not configured edge case", () => {
 
   test("importChatHistory throws when config is missing", async () => {
     const { importChatHistory } = await import("../../src/services/mtproto");
-    await expect(importChatHistory(repo, 1, { limit: 10 })).rejects.toThrow(
-      "MTProto not configured",
-    );
+    await expect(
+      importChatHistory(repo, 1, { limit: 10, allowedChatIds: new Set([-1]) }),
+    ).rejects.toThrow("MTProto not configured");
   });
 
   test("isMtProtoConfigured returns false", async () => {

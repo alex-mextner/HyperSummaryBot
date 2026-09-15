@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { loadConfig, requireEnv } from "../../src/config/env";
+import { loadConfig, parseChatIdList, parseOwnerUserId, requireEnv } from "../../src/config/env";
 
 describe("requireEnv", () => {
   test("returns value when set", () => {
@@ -42,6 +42,7 @@ describe("loadConfig", () => {
     "MTPROTO_API_HASH",
     "NOTION_TOKEN",
     "BOT_ADMIN_ID",
+    "ALLOWED_CHAT_IDS",
     "AI_DEBUG_LOGS",
   ];
 
@@ -65,6 +66,7 @@ describe("loadConfig", () => {
     process.env.GEMINI_BASE_URL = "https://gemini";
     process.env.GEMINI_MODEL = "gem-model";
     process.env.GEMINI_FAST_MODEL = "gem-fast";
+    process.env.ALLOWED_CHAT_IDS = "-1001,-2";
   });
 
   afterEach(() => {
@@ -86,6 +88,7 @@ describe("loadConfig", () => {
     expect(config.ZAI_API_KEY).toBe("zai-key");
     expect(config.ZAI_BASE_URL).toBe("https://z.ai");
     expect(config.ZAI_MODEL).toBe("zai-model");
+    expect(config.ALLOWED_CHAT_IDS).toEqual([-1001, -2]);
   });
 
   test("reads NODE_ENV and DATABASE_PATH from env", () => {
@@ -138,5 +141,32 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.MTPROTO_API_ID).toBe(999);
     expect(config.MTPROTO_API_HASH).toBe("hash");
+  });
+});
+
+describe("parseChatIdList", () => {
+  test("parses comma-separated Bot API chat IDs", () => {
+    expect(parseChatIdList("-1001, -2")).toEqual([-1001, -2]);
+  });
+
+  test("returns an empty list when not configured", () => {
+    expect(parseChatIdList(undefined)).toEqual([]);
+  });
+
+  test("rejects unsafe or malformed IDs", () => {
+    expect(() => parseChatIdList("-1001,nope")).toThrow("Invalid chat ID");
+    expect(() => parseChatIdList("0")).toThrow("Invalid chat ID");
+  });
+});
+
+describe("parseOwnerUserId", () => {
+  test("parses a positive Telegram user ID", () => {
+    expect(parseOwnerUserId("42")).toBe(42);
+  });
+
+  test("is optional but rejects malformed values", () => {
+    expect(parseOwnerUserId(undefined)).toBeUndefined();
+    expect(() => parseOwnerUserId("nope")).toThrow("positive safe integer");
+    expect(() => parseOwnerUserId("0")).toThrow("positive safe integer");
   });
 });
