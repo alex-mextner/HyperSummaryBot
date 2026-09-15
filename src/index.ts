@@ -4,6 +4,7 @@ import { sqliteStorage } from "@gramio/storage-sqlite";
 import { loadConfig } from "./config/env";
 import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
+import { assertDatabaseReady } from "./db/migrations";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary } from "./agents/summary";
 import { extractNote } from "./agents/note-extractor";
@@ -63,6 +64,7 @@ function safeCommand<TContext extends { reply: (text: string) => Promise<unknown
 
 // Init database
 const db = initDatabase(config.DATABASE_PATH);
+assertDatabaseReady(db);
 const chatHistory = new ChatHistoryRepository(db);
 const debtTracker = new DebtTracker(db);
 
