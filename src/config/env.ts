@@ -36,6 +36,7 @@ export interface EnvConfig {
 
   // Admin
   BOT_ADMIN_ID?: number;
+  ALLOWED_CHAT_IDS: number[];
   AI_DEBUG_LOGS: boolean;
 
   // Webhook (optional — alternative to polling)
@@ -51,6 +52,27 @@ export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} environment variable is required`);
   return value;
+}
+
+export function parseChatIdList(value: string | undefined): number[] {
+  if (!value?.trim()) return [];
+  return value.split(",").map((part) => {
+    const raw = part.trim();
+    const id = Number(raw);
+    if (!raw || !Number.isSafeInteger(id) || id === 0) {
+      throw new Error(`Invalid chat ID in ALLOWED_CHAT_IDS: ${raw || "<empty>"}`);
+    }
+    return id;
+  });
+}
+
+export function parseOwnerUserId(value: string | undefined): number | undefined {
+  if (!value?.trim()) return undefined;
+  const id = Number(value.trim());
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error("BOT_ADMIN_ID must be a positive safe integer");
+  }
+  return id;
 }
 
 export function loadConfig(): EnvConfig {
@@ -86,9 +108,8 @@ export function loadConfig(): EnvConfig {
       : undefined,
     MTPROTO_API_HASH: process.env.MTPROTO_API_HASH,
 
-    BOT_ADMIN_ID: process.env.BOT_ADMIN_ID
-      ? Number.parseInt(process.env.BOT_ADMIN_ID, 10)
-      : undefined,
+    BOT_ADMIN_ID: parseOwnerUserId(process.env.BOT_ADMIN_ID),
+    ALLOWED_CHAT_IDS: parseChatIdList(process.env.ALLOWED_CHAT_IDS),
     AI_DEBUG_LOGS: process.env.AI_DEBUG_LOGS === "true",
 
     WEBHOOK_URL: process.env.WEBHOOK_URL,

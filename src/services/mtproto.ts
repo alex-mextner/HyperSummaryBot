@@ -78,7 +78,8 @@ export async function importChatHistory(
     offsetDate?: Date;
     type?: "group" | "channel";
     accessHash?: unknown;
-  } = {},
+    allowedChatIds: ReadonlySet<number>;
+  },
 ): Promise<{ imported: number; skipped: number }> {
   const client = getClient();
 
@@ -87,6 +88,9 @@ export async function importChatHistory(
 
   // Normalize chatId to Bot API format so DB queries work consistently
   const dbChatId = options.type === "channel" ? -1000000000000 - chatId : -chatId;
+  if (!options.allowedChatIds.has(dbChatId)) {
+    throw new Error("MTProto source chat is not allowlisted");
+  }
 
   // Build peer directly from known type + access_hash (avoids resolvePeer cache issues).
   // Fallback to resolvePeer if accessHash not provided (e.g. my_chat_member events).
@@ -375,7 +379,12 @@ export async function getCommonGroups(
 
 export async function startRealtimeSync(
   chatHistoryRepo: ChatHistoryRepository,
+  allowedChatIds: ReadonlySet<number>,
 ): Promise<() => void> {
+  if (allowedChatIds.size === 0) {
+    console.warn("[mtproto] Real-time sync skipped: source allowlist is empty");
+    return () => {};
+  }
   const client = getClient();
 
   try {
@@ -394,11 +403,13 @@ export async function startRealtimeSync(
     if (!msg || msg._ !== "message") return;
 
     const peerId = msg.peerId as Record<string, unknown> | undefined;
-    const rawChatId = (peerId?.channelId ?? peerId?.chatId ?? peerId?.userId) as number | undefined;
+    if (peerId?.userId !== undefined) return;
+    const rawChatId = (peerId?.channelId ?? peerId?.chatId) as number | undefined;
     if (!rawChatId) return;
 
     const isChannel = peerId?.channelId !== undefined;
     const dbChatId = isChannel ? -1000000000000 - Number(rawChatId) : -Number(rawChatId);
+    if (!allowedChatIds.has(dbChatId)) return;
     const msgId = msg.id as number;
 
     // Check if already exists (fast dedup)

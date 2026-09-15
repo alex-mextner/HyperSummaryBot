@@ -4,6 +4,7 @@ import { loadConfig } from "./config/env";
 import { initDatabase } from "./db/client";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 const config = loadConfig();
+const allowedChatIds = new Set(config.ALLOWED_CHAT_IDS);
 
 /** Start a lightweight HTTP test server alongside the bot.
  *  Endpoints:
@@ -71,6 +72,10 @@ async function handleTestSummary(req: Request, chatHistory: ChatHistoryRepositor
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const chatId = Number(body.chatId || -1003848286052);
   const limit = Number(body.limit || 99999);
+
+  if (!allowedChatIds.has(chatId)) {
+    return jsonResponse({ error: "Source chat is not allowlisted" }, 403);
+  }
 
   const messages = await chatHistory.getRecent(chatId, limit);
 
@@ -170,6 +175,7 @@ async function handleTestImport(req: Request, chatHistory: ChatHistoryRepository
     const result = await importChatHistory(chatHistory, chatId, {
       limit: 99999,
       type: type as "group" | "channel",
+      allowedChatIds,
     });
 
     return jsonResponse({

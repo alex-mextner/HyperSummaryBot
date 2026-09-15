@@ -20,6 +20,8 @@ process.env.GROQ_FAST_MODEL = "test-groq-fast";
 
 process.env.MTPROTO_API_ID = "31496323";
 process.env.MTPROTO_API_HASH = "e345f63982415e960843085806219f2f";
+process.env.BOT_ADMIN_ID = "42";
+process.env.ALLOWED_CHAT_IDS = "-1,-1002";
 
 // Helpers for gramio mock tests
 export const gramioApiCalls: { method: string; [key: string]: unknown }[] = [];

@@ -16,7 +16,10 @@ export function toBotApiChatId(mtprotoId: number, type: "group" | "channel"): nu
  * 1 group  → auto-select
  * >1       → inline keyboard, null (user must pick)
  */
-export async function resolveDMChat(ctx: any): Promise<DMChatChoice | null> {
+export async function resolveDMChat(
+  ctx: any,
+  allowedChatIds: ReadonlySet<number>,
+): Promise<DMChatChoice | null> {
   const userId = ctx.from?.id;
   if (!userId) return null;
 
@@ -24,12 +27,18 @@ export async function resolveDMChat(ctx: any): Promise<DMChatChoice | null> {
 
   // Reuse cached selection
   if (typeof session.selectedChatId === "number" && typeof session.selectedChatTitle === "string") {
-    return { chatId: session.selectedChatId, title: session.selectedChatTitle };
+    if (allowedChatIds.has(session.selectedChatId)) {
+      return { chatId: session.selectedChatId, title: session.selectedChatTitle };
+    }
+    delete session.selectedChatId;
+    delete session.selectedChatTitle;
   }
 
   const config = loadConfig();
   const { getCommonGroups } = await import("../services/mtproto");
-  const groups = await getCommonGroups(config.BOT_USERNAME);
+  const groups = (await getCommonGroups(config.BOT_USERNAME)).filter((group) =>
+    allowedChatIds.has(toBotApiChatId(group.id, group.type)),
+  );
 
   if (groups.length === 0) {
     await ctx.reply(
