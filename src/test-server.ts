@@ -2,6 +2,7 @@ import { aiStreamRound } from "./services/ai/streaming";
 import { generateSummary } from "./agents/summary";
 import { loadConfig } from "./config/env";
 import { initDatabase } from "./db/client";
+import { assertDatabaseReady } from "./db/migrations";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 const config = loadConfig();
 const allowedChatIds = new Set(config.ALLOWED_CHAT_IDS);
@@ -22,6 +23,7 @@ export function startTestServer(): any | null {
   }
 
   const db = initDatabase(config.DATABASE_PATH);
+  assertDatabaseReady(db);
   const chatHistory = new ChatHistoryRepository(db);
 
   const server = Bun.serve({
