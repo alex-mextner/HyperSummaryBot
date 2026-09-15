@@ -149,6 +149,34 @@ describe("ChatHistoryRepository", () => {
     expect(stats.latestDate).toBeNull();
   });
 
+  test("deleteByMessageIds removes only matching messages in the selected chat", async () => {
+    await repo.save({
+      chatId: 1,
+      messageId: 10,
+      userId: 1,
+      userName: "Alice",
+      role: "user",
+      content: "Delete",
+      replyToMessageId: null,
+      forwardFromName: null,
+    });
+    await repo.save({
+      chatId: 2,
+      messageId: 10,
+      userId: 2,
+      userName: "Bob",
+      role: "user",
+      content: "Keep",
+      replyToMessageId: null,
+      forwardFromName: null,
+    });
+
+    await repo.deleteByMessageIds(1, [10]);
+
+    expect(await repo.getRecent(1, 10)).toHaveLength(0);
+    expect(await repo.getRecent(2, 10)).toHaveLength(1);
+  });
+
   test("updateContent modifies existing message", async () => {
     await repo.save(makeMessage(1, 100, "Original"));
     await repo.updateContent(1, 100, "Updated");

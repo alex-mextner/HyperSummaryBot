@@ -5,16 +5,42 @@ import { initDatabase } from "../../src/db/client";
 import { createTestSchema } from "../helpers/db-schema";
 import { ChatHistoryRepository } from "../../src/db/repositories/chat-history";
 
+function createEmitterMock() {
+  return {
+    add: mock((_handler: unknown) => {}),
+    remove: mock((_handler: unknown) => {}),
+  };
+}
+
 // Shared mock client so getClient() singleton always returns the same cached instance
 const sharedMockClient = {
   start: mock(() => Promise.resolve()),
   resolvePeer: mock(async (chatId: number) => ({ _: "inputPeerChat", chat_id: chatId })),
   call: mock(async (_params: any) => ({ messages: [] })),
-  updates: {
-    on: mock(() => {}),
-    off: mock(() => {}),
-  },
+  onNewMessage: createEmitterMock(),
+  onEditMessage: createEmitterMock(),
+  onDeleteMessage: createEmitterMock(),
 };
+
+function highLevelMessage(options: {
+  id: number;
+  chatId: number;
+  text: string;
+  userId?: number;
+  privateDialog?: boolean;
+}) {
+  const userId = options.userId ?? 42;
+  return {
+    id: options.id,
+    chat: options.privateDialog
+      ? { type: "user", id: options.chatId }
+      : { type: "chat", id: options.chatId },
+    sender: { id: userId, username: "tester", displayName: "Test User" },
+    text: options.text,
+    replyToMessage: null,
+    forward: null,
+  };
+}
 
 mock.module("@mtcute/bun", () => ({
   TelegramClient: class MockTelegramClient {
@@ -36,17 +62,22 @@ describe("MTProto service", () => {
   let db: Database;
   let repo: ChatHistoryRepository;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     db = initDatabase(":memory:");
     createTestSchema(db);
     repo = new ChatHistoryRepository(db);
 
-    // Reset shared mock methods
+    // Dispose a listener left by a previous test before clearing call history.
+    await startRealtimeSync(repo, new Set());
     sharedMockClient.start.mockClear?.();
     sharedMockClient.resolvePeer.mockClear?.();
     sharedMockClient.call.mockClear?.();
-    sharedMockClient.updates.on.mockClear?.();
-    sharedMockClient.updates.off.mockClear?.();
+    sharedMockClient.onNewMessage.add.mockClear?.();
+    sharedMockClient.onNewMessage.remove.mockClear?.();
+    sharedMockClient.onEditMessage.add.mockClear?.();
+    sharedMockClient.onEditMessage.remove.mockClear?.();
+    sharedMockClient.onDeleteMessage.add.mockClear?.();
+    sharedMockClient.onDeleteMessage.remove.mockClear?.();
 
     sharedMockClient.start = mock(() => Promise.resolve());
     sharedMockClient.resolvePeer = mock(async (chatId: number) => ({
@@ -54,8 +85,6 @@ describe("MTProto service", () => {
       chat_id: chatId,
     }));
     (sharedMockClient as any).call = mock(async (_params: any) => ({ messages: [] }));
-    sharedMockClient.updates.on = mock(() => {});
-    sharedMockClient.updates.off = mock(() => {});
   });
 
   test("isMtProtoConfigured returns true when configured", async () => {
@@ -157,54 +186,48 @@ describe("MTProto service", () => {
     expect(groups[1]!.title).toBe("Channel Two");
   });
 
-  test("startRealtimeSync returns dispose function", async () => {
-    const dispose = await startRealtimeSync(repo, allowedChatIds);
-    expect(typeof dispose).toBe("function");
-    expect(() => dispose()).not.toThrow();
+  test("startRealtimeSync registers typed high-level message handlers", async () => {
+    await startRealtimeSync(repo, allowedChatIds);
+    expect(sharedMockClient.onNewMessage.add.mock.calls).toHaveLength(1);
+    expect(sharedMockClient.onEditMessage.add.mock.calls).toHaveLength(1);
+    expect(sharedMockClient.onDeleteMessage.add.mock.calls).toHaveLength(1);
   });
 
-  test("startRealtimeSync attaches update handler", async () => {
+  test("new-message handler persists the SDK high-level message shape", async () => {
     await startRealtimeSync(repo, allowedChatIds);
-    expect(sharedMockClient.updates.on.mock.calls.length).toBeGreaterThan(0);
-  });
+    const handler = (sharedMockClient.onNewMessage.add.mock.calls as any)[0][0];
 
-  test("update handler saves new messages", async () => {
-    await startRealtimeSync(repo, allowedChatIds);
-    const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
-    expect(typeof handler).toBe("function");
-
-    await handler({
-      _: "updateNewMessage",
-      message: {
-        _: "message",
-        id: 999,
-        peerId: { chatId: 1 },
-        fromId: { userId: 42 },
-        message: "Synced msg",
-        replyTo: null,
-        fwdFrom: null,
-      },
-    });
+    await handler(highLevelMessage({ id: 999, chatId: -1, text: "Synced msg" }));
 
     const recent = await repo.getRecent(-1, 10);
-    expect(recent.some((m) => m.messageId === 999)).toBe(true);
+    expect(recent).toHaveLength(1);
+    expect(recent[0]!.messageId).toBe(999);
+    expect(recent[0]!.userId).toBe(42);
+    expect(recent[0]!.userName).toBe("Test User @tester");
+    expect(recent[0]!.content).toBe("Synced msg");
+  });
+
+  test("edit-message handler upserts the existing message", async () => {
+    await startRealtimeSync(repo, allowedChatIds);
+    const newHandler = (sharedMockClient.onNewMessage.add.mock.calls as any)[0][0];
+    const editHandler = (sharedMockClient.onEditMessage.add.mock.calls as any)[0][0];
+
+    await newHandler(highLevelMessage({ id: 1000, chatId: -1, text: "Before" }));
+    await editHandler(highLevelMessage({ id: 1000, chatId: -1, text: "After" }));
+
+    const recent = await repo.getRecent(-1, 10);
+    expect(recent).toHaveLength(1);
+    expect(recent[0]!.content).toBe("After");
   });
 
   test("realtime sync never persists private dialogs even on numeric collision", async () => {
     const collisionAllowlist = new Set<number>([-42]);
     await startRealtimeSync(repo, collisionAllowlist);
-    const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
+    const handler = (sharedMockClient.onNewMessage.add.mock.calls as any)[0][0];
 
-    await handler({
-      _: "updateNewMessage",
-      message: {
-        _: "message",
-        id: 1002,
-        peerId: { userId: 42 },
-        fromId: { userId: 42 },
-        message: "Private message",
-      },
-    });
+    await handler(
+      highLevelMessage({ id: 1002, chatId: -42, text: "Private message", privateDialog: true }),
+    );
 
     expect(await repo.getRecent(-42, 10)).toHaveLength(0);
   });
@@ -218,52 +241,84 @@ describe("MTProto service", () => {
 
   test("realtime sync ignores a source outside the allowlist", async () => {
     await startRealtimeSync(repo, allowedChatIds);
-    const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
+    const handler = (sharedMockClient.onNewMessage.add.mock.calls as any)[0][0];
 
-    await handler({
-      _: "updateNewMessage",
-      message: {
-        _: "message",
-        id: 1001,
-        peerId: { chatId: 2 },
-        fromId: { userId: 42 },
-        message: "Should not persist",
-      },
-    });
+    await handler(highLevelMessage({ id: 1001, chatId: -2, text: "Should not persist" }));
 
     expect(await repo.getRecent(-2, 10)).toHaveLength(0);
   });
 
-  test("update handler dedups existing messages", async () => {
+  test("delete handler removes allowlisted channel messages", async () => {
+    const channelId = -1000000000002;
     await repo.save({
-      chatId: -1,
-      messageId: 999,
-      userId: 1,
+      chatId: channelId,
+      messageId: 2000,
+      userId: 42,
       userName: "User",
       role: "user",
-      content: "Already here",
+      content: "Delete me",
       replyToMessageId: null,
       forwardFromName: null,
     });
+    await startRealtimeSync(repo, allowedChatIds);
+    const handler = (sharedMockClient.onDeleteMessage.add.mock.calls as any)[0][0];
+
+    await handler({ channelId, messageIds: [2000] });
+
+    expect(await repo.getRecent(channelId, 10)).toHaveLength(0);
+  });
+
+  test("non-channel delete is skipped because the source chat is unavailable", async () => {
+    await repo.save({
+      chatId: -1,
+      messageId: 2001,
+      userId: 42,
+      userName: "User",
+      role: "user",
+      content: "Keep until source can be resolved",
+      replyToMessageId: null,
+      forwardFromName: null,
+    });
+    await startRealtimeSync(repo, allowedChatIds);
+    const handler = (sharedMockClient.onDeleteMessage.add.mock.calls as any)[0][0];
+
+    await handler({ channelId: null, messageIds: [2001] });
+
+    expect(await repo.getRecent(-1, 10)).toHaveLength(1);
+  });
+
+  test("starting realtime sync twice removes the previous exact listeners", async () => {
+    await startRealtimeSync(repo, allowedChatIds);
+    const firstNewHandler = (sharedMockClient.onNewMessage.add.mock.calls as any)[0][0];
+    const firstEditHandler = (sharedMockClient.onEditMessage.add.mock.calls as any)[0][0];
+    const firstDeleteHandler = (sharedMockClient.onDeleteMessage.add.mock.calls as any)[0][0];
 
     await startRealtimeSync(repo, allowedChatIds);
-    const handler = (sharedMockClient.updates.on.mock.calls as any)[0][1];
 
-    await handler({
-      _: "updateNewMessage",
-      message: {
-        _: "message",
-        id: 999,
-        peerId: { chatId: 1 },
-        fromId: { userId: 42 },
-        message: "Synced msg",
-        replyTo: null,
-        fwdFrom: null,
-      },
-    });
+    expect(sharedMockClient.onNewMessage.remove).toHaveBeenCalledWith(firstNewHandler);
+    expect(sharedMockClient.onEditMessage.remove).toHaveBeenCalledWith(firstEditHandler);
+    expect(sharedMockClient.onDeleteMessage.remove).toHaveBeenCalledWith(firstDeleteHandler);
+  });
 
-    const recent = await repo.getRecent(-1, 10);
-    expect(recent).toHaveLength(1);
-    expect(recent[0]!.content).toBe("Already here");
+  test("failed client start removes all registered listeners", async () => {
+    sharedMockClient.start = mock(() => Promise.reject(new Error("not authenticated")));
+
+    const dispose = await startRealtimeSync(repo, allowedChatIds);
+
+    expect(sharedMockClient.onNewMessage.remove.mock.calls).toHaveLength(1);
+    expect(sharedMockClient.onEditMessage.remove.mock.calls).toHaveLength(1);
+    expect(sharedMockClient.onDeleteMessage.remove.mock.calls).toHaveLength(1);
+    expect(typeof dispose).toBe("function");
+  });
+
+  test("dispose removes listeners and prevents later writes", async () => {
+    const dispose = await startRealtimeSync(repo, allowedChatIds);
+    const handler = (sharedMockClient.onNewMessage.add.mock.calls as any)[0][0];
+
+    dispose();
+    await handler(highLevelMessage({ id: 3000, chatId: -1, text: "Too late" }));
+
+    expect(sharedMockClient.onNewMessage.remove.mock.calls).toHaveLength(1);
+    expect(await repo.getRecent(-1, 10)).toHaveLength(0);
   });
 });
