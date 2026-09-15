@@ -16,6 +16,7 @@ import {
 } from "./bot/message-processor";
 import { handleConnectAccount } from "./bot/connect-account";
 import { resolveDMChat, toBotApiChatId } from "./bot/dm-chat-resolver";
+import { deliverDmText, requireDmDelivery } from "./bot/dm-delivery";
 import { DebtTracker } from "./services/debt-tracker";
 import { createAccessPolicy } from "./security/access-policy";
 
@@ -145,6 +146,16 @@ bot.onError(({ kind, error }) => {
   console.error(`Bot error (${kind}):`, error);
 });
 
+async function requireDmRecipient(ctx: {
+  from?: { id: number };
+  chat?: { type: string };
+  reply: (text: string) => Promise<unknown>;
+}): Promise<number | null> {
+  const userId = ctx.from?.id;
+  if (!userId) return null;
+  return (await requireDmDelivery(bot, ctx, userId)) ? userId : null;
+}
+
 // Commands
 bot.command(
   "start",
@@ -200,6 +211,8 @@ bot.command(
       return;
     }
     if (!(await requireAllowedSource(ctx, targetChatId))) return;
+    const recipientUserId = await requireDmRecipient(ctx);
+    if (!recipientUserId) return;
 
     try {
       const allMessages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
@@ -208,13 +221,13 @@ bot.command(
       const messages = allMessages.filter((m) => m.userId !== botUserId);
 
       if (messages.length === 0) {
-        await ctx.reply("Нет сообщений для анализа.");
+        await deliverDmText(bot, ctx, recipientUserId, "Нет сообщений для анализа.");
         return;
       }
 
       await generateSummary({
         chatId: targetChatId,
-        replyToChatId: chat.type === "private" ? chat.id : targetChatId,
+        replyToChatId: recipientUserId,
         messages: messages.map((m) => ({
           userId: m.userId,
           userName: m.userName,
@@ -233,12 +246,19 @@ bot.command(
         errMsg.includes("token") ||
         errMsg.includes("All AI providers failed")
       ) {
-        await ctx.reply(
-          "❌ AI-сервисы временно недоступны (проблема с ключами API).\n" +
-            "Админ уже уведомлён. Попробуй позже.",
+        await deliverDmText(
+          bot,
+          ctx,
+          recipientUserId,
+          "❌ AI-сервисы временно недоступны. Попробуй позже.",
         );
       } else {
-        await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
+        await deliverDmText(
+          bot,
+          ctx,
+          recipientUserId,
+          "❌ Ошибка при генерации саммари. Попробуй позже.",
+        );
       }
     }
   }),
@@ -257,9 +277,6 @@ bot.command(
       return;
     }
 
-    const userId = ctx.from?.id;
-    if (!userId) return;
-
     let targetChatId: number;
 
     if (chat.type === "private") {
@@ -273,37 +290,38 @@ bot.command(
       return;
     }
     if (!(await requireAllowedSource(ctx, targetChatId))) return;
-
-    await ctx.reply("🤔 Анализирую вопрос...");
+    const recipientUserId = await requireDmRecipient(ctx);
+    if (!recipientUserId) return;
 
     try {
       const messages = await ctx.chatHistory.getRecent(targetChatId, 100);
 
       if (messages.length === 0) {
-        await ctx.reply("Нет сообщений для анализа.");
+        await deliverDmText(bot, ctx, recipientUserId, "Нет сообщений для анализа.");
         return;
       }
 
-      try {
-        await bot.api.sendMessage({
-          chat_id: userId,
-          text: `🔍 <b>Вопрос:</b> ${question}\n\n<i>Анализирую ${messages.length} сообщений...</i>`,
-          parse_mode: "HTML",
-        });
-      } catch {
-        await ctx.reply("Открой ЛС со мной, чтобы получить ответ.");
+      if (
+        !(await deliverDmText(
+          bot,
+          ctx,
+          recipientUserId,
+          `🔍 Вопрос: ${question}\n\nАнализирую ${messages.length} сообщений...`,
+        ))
+      ) {
         return;
       }
 
       // TODO: Implement QA agent with streaming
-      await bot.api.sendMessage({
-        chat_id: userId,
-        text: `📋 <b>Ответ:</b>\n\n${question}\n\n(Агент в разработке)`,
-        parse_mode: "HTML",
-      });
+      await deliverDmText(
+        bot,
+        ctx,
+        recipientUserId,
+        `📋 Ответ:\n\n${question}\n\n(Агент в разработке)`,
+      );
     } catch (error) {
       console.error("Ask error:", error);
-      await ctx.reply("❌ Ошибка при обработке вопроса.");
+      await deliverDmText(bot, ctx, recipientUserId, "❌ Ошибка при обработке вопроса.");
     }
   }),
 );
@@ -334,15 +352,17 @@ bot.command(
       await ctx.reply("🔍 Введи запрос: /search <текст>");
       return;
     }
+    const recipientUserId = await requireDmRecipient(ctx);
+    if (!recipientUserId) return;
 
-    await ctx.reply(`🔍 Ищу: "${query}"...`);
+    if (!(await deliverDmText(bot, ctx, recipientUserId, `🔍 Ищу: "${query}"...`))) return;
 
     try {
       const messages = await ctx.chatHistory.getRecent(targetChatId, 99999);
       const results = messages.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()));
 
       if (results.length === 0) {
-        await ctx.reply("Ничего не найдено.");
+        await deliverDmText(bot, ctx, recipientUserId, "Ничего не найдено.");
         return;
       }
 
@@ -351,12 +371,15 @@ bot.command(
         .map((m) => `${m.userName}: ${m.content.slice(0, 200)}`)
         .join("\n\n");
 
-      await ctx.reply(`🔍 <b>Результаты (${results.length}):</b>\n\n${formatted}`, {
-        parse_mode: "HTML",
-      });
+      await deliverDmText(
+        bot,
+        ctx,
+        recipientUserId,
+        `🔍 Результаты (${results.length}):\n\n${formatted}`,
+      );
     } catch (error) {
       console.error("Search error:", error);
-      await ctx.reply("❌ Ошибка при поиске.");
+      await deliverDmText(bot, ctx, recipientUserId, "❌ Ошибка при поиске.");
     }
   }),
 );
@@ -399,14 +422,25 @@ bot.command(
       return;
     }
     if (!(await requireAllowedSource(ctx, targetChatId))) return;
+    const recipientUserId = await requireDmRecipient(ctx);
+    if (!recipientUserId) return;
 
-    await ctx.reply("📝 Анализирую сообщения и извлекаю заметку…");
+    if (
+      !(await deliverDmText(
+        bot,
+        ctx,
+        recipientUserId,
+        "📝 Анализирую сообщения и извлекаю заметку…",
+      ))
+    ) {
+      return;
+    }
 
     try {
       const messages = await ctx.chatHistory.getRecent(targetChatId, MAX_CHAT_HISTORY);
 
       if (messages.length === 0) {
-        await ctx.reply("Нет сообщений для анализа.");
+        await deliverDmText(bot, ctx, recipientUserId, "Нет сообщений для анализа.");
         return;
       }
 
@@ -427,24 +461,34 @@ bot.command(
             : undefined,
       });
 
-      await ctx.reply(
+      await deliverDmText(
+        bot,
+        ctx,
+        recipientUserId,
         `✅ Заметка сохранена в Notion\n\n` +
-          `<b>${note.title}</b>\n` +
+          `${note.title}\n` +
           `${note.summary.slice(0, 200)}${note.summary.length > 200 ? "…" : ""}\n\n` +
-          `<a href="${result.url}">Открыть в Notion</a>`,
-        { parse_mode: "HTML" },
+          `Открыть в Notion: ${result.url}`,
       );
     } catch (error) {
       console.error("Note extraction error:", error);
       const errMsg = error instanceof Error ? error.message : "";
       if (errMsg.includes("Notion API error")) {
-        await ctx.reply(
-          "❌ Ошибка Notion API.\n\n" + "Проверь что интеграция имеет доступ к выбранной базе.",
+        await deliverDmText(
+          bot,
+          ctx,
+          recipientUserId,
+          "❌ Ошибка Notion API. Проверь доступ интеграции к выбранной базе.",
         );
       } else if (errMsg.includes("not configured")) {
-        await ctx.reply("❌ Notion не настроен на сервере.");
+        await deliverDmText(bot, ctx, recipientUserId, "❌ Notion не настроен на сервере.");
       } else {
-        await ctx.reply("❌ Ошибка при создании заметки. Попробуй позже.");
+        await deliverDmText(
+          bot,
+          ctx,
+          recipientUserId,
+          "❌ Ошибка при создании заметки. Попробуй позже.",
+        );
       }
     }
   }),
@@ -510,11 +554,11 @@ bot.command(
 bot.command(
   "digest",
   safeCommand("digest", async (ctx) => {
-    const userId = ctx.from?.id;
-    if (!userId) return;
     if (!(await requireOwner(ctx))) return;
+    const recipientUserId = await requireDmRecipient(ctx);
+    if (!recipientUserId) return;
 
-    await ctx.reply("📬 Дайджест в разработке. Будет отправлен в ЛС когда готов.");
+    await deliverDmText(bot, ctx, recipientUserId, "📬 Дайджест в разработке.");
   }),
 );
 
@@ -537,25 +581,27 @@ bot.command(
       return;
     }
     if (!(await requireAllowedSource(ctx, targetChatId))) return;
+    const recipientUserId = await requireDmRecipient(ctx);
+    if (!recipientUserId) return;
 
     try {
       const activeDebts = await debtTracker.getActiveDebts(targetChatId);
       if (activeDebts.length === 0) {
-        await ctx.reply("💰 Нет активных долгов в этом чате.");
+        await deliverDmText(bot, ctx, recipientUserId, "💰 Нет активных долгов в этом чате.");
         return;
       }
 
       const { formatAmount } = await import("./services/debt-tracker");
-      const lines = ["💰 <b>Активные долги:</b>\n"];
+      const lines = ["💰 Активные долги:\n"];
       for (const debt of activeDebts) {
         lines.push(
-          `• ${debt.debtorUserName || "Unknown"} → ${debt.creditorUserName || "Unknown"}: <b>${formatAmount(debt.amount, debt.currency)}</b>${debt.description ? ` (${debt.description})` : ""}`,
+          `• ${debt.debtorUserName || "Unknown"} → ${debt.creditorUserName || "Unknown"}: ${formatAmount(debt.amount, debt.currency)}${debt.description ? ` (${debt.description})` : ""}`,
         );
       }
-      await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      await deliverDmText(bot, ctx, recipientUserId, lines.join("\n"));
     } catch (error) {
       console.error("[debts] Error:", error);
-      await ctx.reply("❌ Ошибка при получении списка долгов.");
+      await deliverDmText(bot, ctx, recipientUserId, "❌ Ошибка при получении списка долгов.");
     }
   }),
 );

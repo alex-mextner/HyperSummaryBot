@@ -6,7 +6,11 @@ import { generateSummary } from "../../src/agents/summary";
 function createMockBot() {
   return {
     api: {
-      sendMessage: mock(async () => ({ message_id: 1 })),
+      sendMessage: mock(
+        async (_params: { chat_id: number; text: string; parse_mode?: string }) => ({
+          message_id: 1,
+        }),
+      ),
       editMessageText: mock(async () => true),
       deleteMessage: mock(async () => true),
       sendChatAction: mock(async () => true),
@@ -65,6 +69,22 @@ describe("generateSummary", () => {
     expect(userPrompt).toContain("---");
     expect(userPrompt).not.toContain("1 →");
     expect(userPrompt).not.toContain("2 →");
+  });
+
+  test("uses replyToChatId for every summary message instead of the source chat", async () => {
+    const bot = createMockBot();
+
+    await generateSummary({
+      chatId: -100123,
+      replyToChatId: 42,
+      messages: [{ userId: 1, userName: "Alice", content: "Hello" }],
+      bot: bot as any,
+    });
+
+    const sent = bot.api.sendMessage.mock.calls;
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every((call) => call[0]?.chat_id === 42)).toBe(true);
+    expect(sent.some((call) => call[0]?.chat_id === -100123)).toBe(false);
   });
 
   test("returns result text", async () => {
