@@ -37,6 +37,7 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
+            export PATH=/var/www/.bun/bin:/usr/local/bin:/usr/bin:/bin
             APP=/var/www/hyper-summary-bot
             BUN=/var/www/.bun/bin/bun
             PM2=/var/www/.bun/bin/pm2
