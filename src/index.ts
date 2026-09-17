@@ -14,7 +14,6 @@ import {
   parseSearchQuery,
   parseAskQuestion,
 } from "./bot/message-processor";
-import { handleConnectAccount } from "./bot/connect-account";
 import { resolveDMChat, toBotApiChatId } from "./bot/dm-chat-resolver";
 import { deliverDmText, requireDmDelivery } from "./bot/dm-delivery";
 import { DebtTracker } from "./services/debt-tracker";
@@ -605,306 +604,26 @@ bot.command(
   }),
 );
 
-// In-memory store for pending MTProto auth promises
-const pendingAuthCodes = new Map<
-  number,
-  { resolve: (code: string) => void; reject: (err: Error) => void }
->();
-
-// In-memory store for pending 2FA password promises
-const pendingPasswords = new Map<
-  number,
-  { resolve: (password: string) => void; reject: (err: Error) => void }
->();
-
-// Cooldown and attempt tracking per user
-const CONNECT_COOLDOWN_MS = 60_000;
-const MAX_CODE_ATTEMPTS = 3;
-const MAX_PASSWORD_ATTEMPTS = 3;
-const connectAttempts = new Map<number, number>();
-const codeAttemptCounts = new Map<number, number>();
-const passwordAttemptCounts = new Map<number, number>();
-
-function isConnectCooldownActive(userId: number): boolean {
-  const last = connectAttempts.get(userId);
-  return last !== undefined && Date.now() - last < CONNECT_COOLDOWN_MS;
-}
-
-/** Strip spaces, dashes, parentheses; ensure leading '+'. */
-function normalizePhone(raw: string): string | undefined {
-  const normalized = raw.replace(/[\s\-()]/g, "");
-  if (!normalized) return undefined;
-  return normalized.startsWith("+") ? normalized : `+${normalized}`;
-}
-
-/** Strip spaces and dashes from OTP (users add separators to avoid Telegram anti-phishing). */
-function normalizeOtpCode(raw: string): string {
-  return raw.replace(/[\s-]/g, "");
-}
-
-async function startMtProtoAuth(ctx: any, userId: number, phone: string): Promise<void> {
-  if (isConnectCooldownActive(userId)) {
-    const last = connectAttempts.get(userId)!;
-    const remaining = Math.ceil((CONNECT_COOLDOWN_MS - (Date.now() - last)) / 1000);
-    await ctx.reply(`⏳ Подождите ${remaining} секунд перед следующей попыткой.`);
-    return;
-  }
-
-  connectAttempts.set(userId, Date.now());
-  codeAttemptCounts.set(userId, 0);
-
-  try {
-    console.log("[connect_account] importing TelegramClient...");
-    const { TelegramClient } = await import("@mtcute/bun");
-    console.log("[connect_account] TelegramClient imported, creating client...");
-    const client = new TelegramClient({
-      apiId: config.MTPROTO_API_ID!,
-      apiHash: config.MTPROTO_API_HASH!,
-      storage: "data/mtcute-session",
-    });
-    console.log("[connect_account] client created, calling start...");
-
-    // Start auth and wait for code / password
-    await client.start({
-      phone,
-      code: async () => {
-        console.log("[connect_account] prompting for auth code");
-        await ctx.reply(
-          "🔑 <b>Код отправлен в Telegram</b>\n\n" +
-            "Введи код через пробелы или дефисы (напр. <code>1 2 3 4 5</code> или <code>123-45</code>):",
-          { parse_mode: "HTML" },
-        );
-
-        return new Promise<string>((resolve, reject) => {
-          pendingAuthCodes.set(userId, { resolve, reject });
-        });
-      },
-      password: async () => {
-        console.log("[connect_account] prompting for 2fa password");
-        passwordAttemptCounts.set(userId, 0);
-
-        // mtcute does NOT pass hint as argument — fetch it manually from Telegram API
-        let hint: string | undefined;
-        try {
-          const pwInfo = await client.call({ _: "account.getPassword" });
-          hint = (pwInfo as any).hint || undefined;
-          console.log("[connect_account] 2fa hint fetched:", hint ?? "(none)");
-        } catch (e) {
-          console.log("[connect_account] failed to fetch 2fa hint:", e);
-        }
-
-        let msg =
-          "🔒 <b>Включена двухэтапная аутентификация</b>\n\n" +
-          "Введи <b>пароль</b>, который ты задал в Telegram в разделе <i>Настройки → Конфиденциальность → Двухэтапная аутентификация</i>.\n\n" +
-          "<i>Это не SMS-код — это твой постоянный пароль от аккаунта.</i>";
-
-        if (hint) {
-          msg += `\n\n💡 <b>Подсказка:</b> <i>${hint}</i>`;
-        }
-
-        await ctx.reply(msg, { parse_mode: "HTML" });
-
-        return new Promise<string>((resolve, reject) => {
-          pendingPasswords.set(userId, { resolve, reject });
-        });
-      },
-    });
-
-    console.log("[connect_account] client.start completed successfully");
-    codeAttemptCounts.delete(userId);
-    passwordAttemptCounts.delete(userId);
-    connectAttempts.delete(userId);
-    await ctx.reply("✅ <b>Аккаунт подключен!</b>", { parse_mode: "HTML" });
-
-    // Auto-import history from common groups (where both user and bot are members)
-    console.log("[connect_account] fetching common groups...");
-    const { getCommonGroups, importChatHistory } = await import("./services/mtproto");
-    const groups = (await getCommonGroups(config.BOT_USERNAME)).filter((group) =>
-      accessPolicy.isAllowedChat(toBotApiChatId(group.id, group.type)),
-    );
-    console.log("[connect_account] allowlisted common groups count:", groups.length);
-
-    if (groups.length === 0) {
-      await ctx.reply(
-        "📭 Не найдено общих групп. Добавь меня в группу — я начну собирать историю автоматически.",
-      );
-    } else {
-      await ctx.reply(`📥 Найдено ${groups.length} общих групп. Начинаю импорт истории...`);
-
-      let importedCount = 0;
-
-      for (const group of groups) {
-        const sourceChatId = toBotApiChatId(group.id, group.type);
-        knownGroupIds.add(sourceChatId);
-        try {
-          const result = await importChatHistory(chatHistory, group.id, {
-            limit: MAX_CHAT_HISTORY,
-            type: group.type,
-            accessHash: group.accessHash,
-            allowedChatIds,
-          });
-          importedCount += result.imported;
-          console.log(
-            `Auto-imported ${result.imported} messages from ${group.title} (${group.id})`,
-          );
-        } catch (err) {
-          console.error(`Failed to import ${group.title}:`, err);
-        }
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-
-      await ctx.reply(
-        `🚀 Импорт завершён: ${importedCount} сообщений из ${groups.length} групп.\n\n` +
-          "История будет доступна для /summary и /search.",
-      );
-    }
-
-    // Start real-time sync for future messages
-    (async () => {
-      try {
-        const { startRealtimeSync } = await import("./services/mtproto");
-        const dispose = await startRealtimeSync(chatHistory, allowedChatIds);
-        if (dispose.toString() !== "() => {}") {
-          console.log("📡 MTProto real-time sync started after auth");
-        }
-      } catch (err) {
-        console.warn("⚠️ MTProto sync failed after auth:", err);
-      }
-    })();
-  } catch (error) {
-    pendingAuthCodes.delete(userId);
-    pendingPasswords.delete(userId);
-    codeAttemptCounts.delete(userId);
-    passwordAttemptCounts.delete(userId);
-    console.error("[connect_account] MTProto auth error:", error);
-    await ctx.reply(
-      `❌ Ошибка авторизации: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
-  }
-}
-
-// MTProto account connection (DM only)
+// MTProto account bootstrap is intentionally an out-of-band admin operation.
+// The bot never accepts phone numbers, OTP codes, contacts, or 2FA passwords.
 bot.command(
   "connect_account",
   safeCommand("connect_account", async (ctx) => {
     if (!(await requireOwner(ctx))) return;
-    console.log("[connect_account] command handler triggered", {
-      userId: ctx.from?.id,
-      chatId: ctx.chat?.id,
-      chatType: ctx.chat?.type,
-    });
-    try {
-      const { isMtProtoConfigured } = await import("./services/mtproto");
-      const mtprotoOk = await isMtProtoConfigured();
-      console.log("[connect_account] isMtProtoConfigured:", mtprotoOk);
-      await handleConnectAccount(ctx, chatHistory, {
-        mtprotoConfigured: mtprotoOk,
-      });
-      console.log("[connect_account] handleConnectAccount completed");
-    } catch (error) {
-      console.error("[connect_account] command handler ERROR:", error);
-      await ctx.reply("❌ Ошибка при обработке команды. Попробуйте позже.");
-    }
+    await ctx.reply(
+      "🔐 Подключение Telegram-аккаунта выполняется только локально администратором сервера. " +
+        "Коды и пароль в чат отправлять не нужно.",
+    );
   }),
 );
 
-// Handle MTProto auth flow in DMs
+// Private-message handler for non-MTProto interactive flows.
 bot.on("message", async (ctx) => {
   const chat = ctx.chat;
   if (!chat || chat.type !== "private") return;
-
   const text = ctx.text || "";
   const userId = ctx.from?.id;
   if (!userId || !accessPolicy.isOwner(userId)) return;
-
-  // Check if user has a pending 2FA password promise
-  const pendingPass = pendingPasswords.get(userId);
-  if (pendingPass) {
-    const password = text.trim();
-    if (!password) {
-      await ctx.reply(
-        "❌ Облачный пароль не может быть пустым. Введи пароль двухэтапной аутентификации:",
-      );
-      return;
-    }
-
-    const attempts = (passwordAttemptCounts.get(userId) ?? 0) + 1;
-    passwordAttemptCounts.set(userId, attempts);
-
-    if (attempts > MAX_PASSWORD_ATTEMPTS) {
-      pendingPasswords.delete(userId);
-      passwordAttemptCounts.delete(userId);
-      pendingPass.reject(new Error("Too many password attempts"));
-      await ctx.reply("❌ Слишком много попыток. Начни заново: /connect_account");
-      return;
-    }
-
-    pendingPass.resolve(password);
-    pendingPasswords.delete(userId);
-    return;
-  }
-
-  // Check if user has a pending code promise
-  const pendingAuth = pendingAuthCodes.get(userId);
-  if (pendingAuth) {
-    // Normalize: strip spaces and dashes that user added to avoid Telegram anti-phishing
-    const rawCode = text.trim();
-    const code = normalizeOtpCode(rawCode);
-
-    // Validate: must be 5 digits after normalization
-    if (!/^\d{5}$/.test(code)) {
-      await ctx.reply(
-        "❌ Неверный код. Введи 5 цифр через пробелы или дефисы (напр. <code>1 2 3 4 5</code> или <code>123-45</code>).",
-        { parse_mode: "HTML" },
-      );
-      return;
-    }
-
-    const attempts = (codeAttemptCounts.get(userId) ?? 0) + 1;
-    codeAttemptCounts.set(userId, attempts);
-
-    if (attempts > MAX_CODE_ATTEMPTS) {
-      pendingAuthCodes.delete(userId);
-      codeAttemptCounts.delete(userId);
-      await ctx.reply("❌ Слишком много попыток. Начни заново: /connect_account");
-      return;
-    }
-
-    pendingAuth.resolve(code);
-    pendingAuthCodes.delete(userId);
-    return;
-  }
-
-  // Handle shared contact (phone number button)
-  const contactPhone = ctx.contact?.phoneNumber;
-  if (contactPhone) {
-    console.log("[connect_account] contact received", { userId, contactPhone });
-    const phone = normalizePhone(contactPhone);
-    if (!phone) {
-      await ctx.reply("❌ Не удалось распознать номер из контакта. Введи вручную: +79123456789");
-      return;
-    }
-    await ctx.reply(`📱 Получен номер: ${phone}\n\n` + "Отправляю запрос на код подтверждения...", {
-      reply_markup: { remove_keyboard: true },
-    });
-    await startMtProtoAuth(ctx, userId, phone);
-    return;
-  }
-
-  // Handle phone number input for MTProto auth
-  const normalizedPhone = text.trim() ? normalizePhone(text.trim()) : undefined;
-  if (normalizedPhone && /^\+\d{7,15}$/.test(normalizedPhone)) {
-    console.log("[connect_account] phone number received", { userId, phone: normalizedPhone });
-
-    await ctx.reply(
-      `📱 Номер: ${normalizedPhone}\n\n` + "Отправляю запрос на код подтверждения...",
-      {
-        reply_markup: { remove_keyboard: true },
-      },
-    );
-    await startMtProtoAuth(ctx, userId, normalizedPhone);
-    return;
-  }
 
   // Handle Notion parent page ID input
   const session = ctx.session as Record<string, unknown>;
@@ -1182,7 +901,7 @@ async function registerBotCommands() {
       { command: "debts", description: "💰 Show active debts / who owes whom" },
       {
         command: "connect_account",
-        description: "🔐 Connect Telegram account for MTProto (DM only)",
+        description: "🔐 Show MTProto admin bootstrap status",
       },
       {
         command: "connect_notion",
@@ -1258,6 +977,23 @@ async function main() {
     await bot.start();
   }
 }
+
+let shutdownStarted = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  console.log(`[process] ${signal}: shutting down MTProto`);
+  try {
+    const { shutdownMtProto } = await import("./services/mtproto");
+    await shutdownMtProto();
+  } catch (error) {
+    console.error("[process] MTProto shutdown failed:", error);
+  } finally {
+    process.exit(0);
+  }
+}
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 // Process-level safety nets — never crash on transient / unhandled errors
 process.on("uncaughtException", (err) => {
