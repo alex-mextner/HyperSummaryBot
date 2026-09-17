@@ -1,43 +1,54 @@
 name: Deploy to DigitalOcean
-
 on:
   push:
     branches: [main]
   workflow_dispatch:
-
-# Limit GITHUB_TOKEN to read-only for all jobs (this workflow only reads the repo and
-# deploys over SSH with separate secrets — it never needs to write via the token).
 permissions:
   contents: read
-
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: latest
-      - run: bun install
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
       - run: bun x tsc --noEmit
       - run: bun run lint
       - run: bun run fmt:check
       - run: bun run test
-
   deploy:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to DO
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f # v1.2.2
+      - name: Deploy exact tested SHA
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f
+        env:
+          RELEASE_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
+          envs: RELEASE_SHA
+          script_stop: true
           script: |
-            cd /opt/hyper-summary-bot
-            git pull origin main
-            bun install
-            bun run db:migrate
-            pm2 reload ecosystem.config.js --update-env
+            set -euo pipefail
+            APP=/var/www/hyper-summary-bot
+            BUN=/var/www/.bun/bin/bun
+            PM2=/var/www/.bun/bin/pm2
+            test -d "$APP/.git" && test -x "$BUN" && test -x "$PM2" && test -f "$APP/.env"
+            cd "$APP"
+            test -z "$(git status --porcelain --untracked-files=no)" || { echo 'tracked production tree is dirty'; exit 1; }
+            git fetch origin "$RELEASE_SHA"
+            git checkout --detach "$RELEASE_SHA"
+            test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+            "$BUN" install --frozen-lockfile
+            "$BUN" run db:migrate
+            "$PM2" reload ecosystem.config.js --update-env
+            sleep 3
+            "$PM2" describe hyper-summary-bot | grep -q 'online'
+            test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
