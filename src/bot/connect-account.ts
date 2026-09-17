@@ -51,9 +51,9 @@ export async function buildConnectAccountStatus(options: {
   }
 
   statusText +=
-    "🔐 <b>Подключение Telegram аккаунта</b>\n\n" +
-    "Это нужно для импорта истории чатов до момента добавления бота.\n\n" +
-    "Отправьте ваш номер телефона в формате <code>+79123456789</code>:";
+    "🔐 <b>MTProto</b>\n\n" +
+    "Подключение аккаунта выполняется только локально администратором сервера. " +
+    "Не отправляй номер телефона, код или пароль в этот чат.";
 
   console.log("[connect_account] buildConnectAccountStatus end, text length:", statusText.length);
   return statusText;
@@ -82,14 +82,7 @@ export async function handleConnectAccount(
     });
 
     console.log("[connect_account] replying with status text length:", statusText.length);
-    await ctx.reply(statusText, {
-      parse_mode: "HTML",
-      reply_markup: {
-        keyboard: [[{ text: "📱 Поделиться номером", request_contact: true }]],
-        resize_keyboard: true,
-        one_time_keyboard: true,
-      },
-    });
+    await ctx.reply(statusText, { parse_mode: "HTML" });
   } catch (error) {
     console.error("[connect_account] ERROR in handleConnectAccount:", error);
     await ctx.reply("❌ Что-то пошло не так. Попробуйте позже или используйте /help.");

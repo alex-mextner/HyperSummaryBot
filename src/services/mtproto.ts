@@ -493,6 +493,15 @@ export async function startRealtimeSync(
   return dispose;
 }
 
+export async function shutdownMtProto(): Promise<void> {
+  activeRealtimeDispose?.();
+  activeRealtimeDispose = null;
+  if (!_client) return;
+  const client = _client;
+  _client = null;
+  await client.disconnect();
+}
+
 export async function isMtProtoConfigured(): Promise<boolean> {
   const config = loadConfig();
   return !!(config.MTPROTO_API_ID && config.MTPROTO_API_HASH);

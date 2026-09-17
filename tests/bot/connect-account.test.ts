@@ -24,8 +24,8 @@ describe("buildConnectAccountStatus", () => {
     });
 
     expect(text).not.toContain("Статус импорта истории");
-    expect(text).toContain("Подключение Telegram аккаунта");
-    expect(text).toContain("Отправьте ваш номер телефона");
+    expect(text).toContain("<b>MTProto</b>");
+    expect(text).toContain("только локально администратором сервера");
     db.close();
   });
 
@@ -101,7 +101,7 @@ describe("handleConnectAccount", () => {
 
     await handleConnectAccount(ctx as any, repo, { mtprotoConfigured: true });
     expect(replies).toHaveLength(1);
-    expect(replies[0]).toContain("Подключение Telegram аккаунта");
+    expect(replies[0]).toContain("<b>MTProto</b>");
     expect(replies[0]).not.toContain("Статус импорта истории");
     db.close();
   });
