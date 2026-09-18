@@ -65,7 +65,7 @@ describe("aiStreamRound", () => {
     expect(result.text).toBe("Fallback");
   });
 
-  test("fallbacks if text was short (< 500 chars) and model failed", async () => {
+  test("discards partial output and retries original request on provider failure", async () => {
     setClientResponse(zaiClient(), {
       iterator: async function* () {
         yield { choices: [{ delta: { content: "Partial" } }] };
@@ -81,23 +81,10 @@ describe("aiStreamRound", () => {
       {},
     );
 
-    expect(result.text).toContain("HF continued");
+    expect(result.text).toBe("HF continued");
   });
 
-  test("does not fallback if substantial text (> 500 chars) was already emitted", async () => {
-    setClientResponse(zaiClient(), {
-      iterator: async function* () {
-        yield { choices: [{ delta: { content: "a".repeat(600) } }] };
-        throw new Error("network error after substantial text");
-      },
-    });
-
-    await expect(
-      aiStreamRound({ messages: [{ role: "user", content: "Hi" }], maxTokens: 10 }, {}),
-    ).rejects.toThrow("network error after substantial text");
-  });
-
-  test("handles z.ai quirk (empty content with reasoning_content)", async () => {
+  test("ignores reasoning-only chunks and falls back only if no final content", async () => {
     setClientResponse(zaiClient(), {
       chunks: [{ choices: [{ delta: { content: "", reasoning_content: "..." } }] }],
     });
@@ -158,9 +145,18 @@ describe("aiStreamRound", () => {
 
     await expect(
       aiStreamRound({ messages: [{ role: "user", content: "Hi" }], maxTokens: 10 }, {}),
-    ).rejects.toThrow("All AI providers failed");
+    ).rejects.toThrow("All 2 AI providers failed");
   });
 
+  test("uses at most two providers by default", async () => {
+    setClientResponse(zaiClient(), { throw: new Error("502") });
+    setClientResponse(hfClient(), { throw: new Error("503") });
+    setClientResponse(geminiClient(), { chunks: [{ choices: [{ delta: { content: "third" } }] }] });
+    await expect(
+      aiStreamRound({ messages: [{ role: "user", content: "Hi" }], maxTokens: 10 }, {}),
+    ).rejects.toThrow("All 2 AI providers failed");
+    expect((geminiClient() as any).chat.completions.create).not.toHaveBeenCalled();
+  });
   test("fast flag uses fast models", async () => {
     let usedModel = "";
     setClientResponse(zaiClient(), {
@@ -192,12 +188,14 @@ describe("aiStreamRound", () => {
       return originalCreate(params, options);
     });
 
-    await aiStreamRound(
-      { messages: [{ role: "user", content: "Hi" }], maxTokens: 10, signal: controller.signal },
-      {},
-    );
+    await expect(
+      aiStreamRound(
+        { messages: [{ role: "user", content: "Hi" }], maxTokens: 10, signal: controller.signal },
+        {},
+      ),
+    ).rejects.toBeDefined();
 
-    expect(capturedSignal).toBe(controller.signal);
+    expect(capturedSignal).toBeUndefined();
   });
 
   test("non-retryable error is thrown immediately", async () => {
