@@ -1,4 +1,14 @@
 /** Message formatting utilities for AI prompts */
+export interface PromptMessage {
+  userId: number;
+  userName: string | null;
+  content: string;
+  messageId?: number;
+  sourceCreatedAt?: Date | null;
+  sourceEditedAt?: Date | null;
+  replyToMessageId?: number | null;
+  threadId?: number | null;
+}
 
 export interface UserLookup {
   /** Map of userId → display name for AI prompt */
@@ -25,7 +35,7 @@ export function buildUserLookup(
     } else if (msg.userName && msg.userName.length > 0 && msg.userName !== "null") {
       display = msg.userName;
     } else {
-      display = `User_${msg.userId}`;
+      display = `Участник ${seen.size}`;
     }
 
     entries.push({ userId: msg.userId, name: display });
@@ -41,15 +51,22 @@ export function buildUserLookup(
 
 /** Format messages for AI prompt with names only.
  *  Raw userId is NEVER exposed to the AI. */
-export function formatMessagesForPrompt(
-  messages: Array<{ userId: number; userName: string | null; content: string; messageId?: number }>,
-): { text: string; lookup: UserLookup } {
+export function formatMessagesForPrompt(messages: PromptMessage[]): {
+  text: string;
+  lookup: UserLookup;
+} {
   const lookup = buildUserLookup(messages);
 
   const lines = messages.map((m) => {
     const name = lookup.names.get(m.userId) ?? "Unknown";
     const source = m.messageId === undefined ? "" : `[msg:${m.messageId}] `;
-    return `${source}${name}: ${m.content}`;
+    const metadata = [
+      m.sourceCreatedAt ? `date=${m.sourceCreatedAt.toISOString()}` : "date=unknown",
+      ...(m.sourceEditedAt ? [`edited=${m.sourceEditedAt.toISOString()}`] : []),
+      ...(m.replyToMessageId ? [`reply_to=${m.replyToMessageId}`] : []),
+      ...(m.threadId ? [`thread=${m.threadId}`] : []),
+    ].join(" ");
+    return `${source}${name}: ${m.content}\n[metadata ${metadata}]`;
   });
 
   return {

@@ -2,6 +2,7 @@ import { Bot } from "gramio";
 import { session } from "@gramio/session";
 import { sqliteStorage } from "@gramio/storage-sqlite";
 import { loadConfig } from "./config/env";
+import { sourceDate } from "./utils/source-metadata";
 import { MAX_CHAT_HISTORY } from "./config/constants";
 import { initDatabase } from "./db/client";
 import { assertDatabaseReady } from "./db/migrations";
@@ -232,6 +233,10 @@ bot.command(
           userName: m.userName,
           content: m.content,
           messageId: m.messageId,
+          sourceCreatedAt: m.sourceCreatedAt,
+          sourceEditedAt: m.sourceEditedAt,
+          replyToMessageId: m.replyToMessageId,
+          threadId: m.threadId,
         })),
         bot,
         placeholderText: `📊 Анализирую ${messages.length} сообщений…`,
@@ -834,6 +839,22 @@ bot.on("message", async (ctx) => {
     replyMessage: ctx.replyMessage,
   });
 
+  await chatHistory.save({
+    chatId: chat.id,
+    messageId: ctx.id,
+    userId: ctx.from?.id ?? 0,
+    userName: ctx.from?.firstName || null,
+    role: "user",
+    content,
+    sourceCreatedAt: sourceDate(ctx.payload.date),
+    sourceEditedAt: sourceDate(ctx.payload.edit_date),
+    threadId: ctx.payload.message_thread_id ?? null,
+    sourceKind: "bot_api",
+    contentKind: ctx.voice ? "placeholder" : "text",
+    replyToMessageId: ctx.replyMessage?.id || null,
+    forwardFromName: buildForwardFromNameForDb(ctx.forwardOrigin),
+  });
+
   // Handle voice messages — transcribe asynchronously
   if (ctx.voice) {
     (async () => {
@@ -848,31 +869,26 @@ bot.on("message", async (ctx) => {
           const transcription = await transcribeAudio(arrayBuffer);
 
           // Update message content with transcription, preserving reply/forward context
-          const prefix = content.split("🎙")[0]; // Keep any "Reply to..." or "Forwarded from..." prefix
-          const transcribedContent = `${prefix}🎙 <i>Voice message:</i> ${transcription.text}`;
-          await chatHistory.updateContent(chat.id, ctx.id, transcribedContent);
-
-          console.log(
-            `Transcribed voice message ${ctx.id}: ${transcription.text.slice(0, 100)}...`,
-          );
+          const transcribedContent = buildMessageContent({
+            text: transcription.text,
+            voice: false,
+            forwardOrigin: ctx.forwardOrigin,
+            replyMessage: ctx.replyMessage,
+          });
+          await chatHistory.updateContent(chat.id, ctx.id, transcribedContent, "transcription");
+          console.log("[voice] transcription persisted");
         }
       } catch (error) {
         console.error("Voice transcription error:", error);
-        await chatHistory.updateContent(chat.id, ctx.id, "[Voice message - transcription failed]");
+        await chatHistory.updateContent(
+          chat.id,
+          ctx.id,
+          "[Voice message - transcription failed]",
+          "placeholder",
+        );
       }
     })();
   }
-
-  await chatHistory.save({
-    chatId: chat.id,
-    messageId: ctx.id,
-    userId: ctx.from?.id ?? 0,
-    userName: ctx.from?.firstName || null,
-    role: "user",
-    content,
-    replyToMessageId: ctx.replyMessage?.id || null,
-    forwardFromName: buildForwardFromNameForDb(ctx.forwardOrigin),
-  });
 
   // Save/update chat title for user-facing display
   void chatHistory
@@ -885,6 +901,40 @@ bot.on("message", async (ctx) => {
     .catch((err) => {
       console.error("Failed to save chat title:", err);
     });
+});
+
+// The Bot API may deliver edits independently of MTProto. Keep the same source
+// timestamps and allowlist boundary instead of replacing them with arrival time.
+bot.on("edited_message", async (ctx) => {
+  const chat = ctx.chat;
+  if (
+    !chat ||
+    (chat.type !== "group" && chat.type !== "supergroup") ||
+    !accessPolicy.isAllowedChat(chat.id)
+  )
+    return;
+  if (ctx.from?.id === botUserId) return;
+  await chatHistory.save({
+    chatId: chat.id,
+    messageId: ctx.id,
+    userId: ctx.from?.id ?? 0,
+    userName: ctx.from?.firstName ?? null,
+    role: "user",
+    content: buildMessageContent({
+      text: ctx.text,
+      caption: ctx.caption,
+      voice: !!ctx.voice,
+      forwardOrigin: ctx.forwardOrigin,
+      replyMessage: ctx.replyMessage,
+    }),
+    replyToMessageId: ctx.replyMessage?.id ?? null,
+    forwardFromName: buildForwardFromNameForDb(ctx.forwardOrigin),
+    sourceCreatedAt: sourceDate(ctx.payload.date),
+    sourceEditedAt: sourceDate(ctx.payload.edit_date),
+    threadId: ctx.payload.message_thread_id ?? null,
+    sourceKind: "bot_api",
+    contentKind: ctx.voice ? "placeholder" : "text",
+  });
 });
 
 // Register bot commands in Telegram UI

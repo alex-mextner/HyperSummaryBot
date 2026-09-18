@@ -13,7 +13,44 @@ export interface ChatMessage {
   content: string;
   replyToMessageId: number | null;
   forwardFromName: string | null;
+  /** Backward-compatible alias for first ingestion, not the message's source time. */
   createdAt: Date;
+  ingestedAt: Date | null;
+  sourceCreatedAt: Date | null;
+  sourceEditedAt: Date | null;
+  threadId: number | null;
+  sourceKind: "legacy" | "bot_api" | "mtproto" | "dump";
+  contentKind: "text" | "placeholder" | "transcription";
+  contentVersion: number;
+}
+
+export type ChatMessageInput = Omit<
+  ChatMessage,
+  | "id"
+  | "createdAt"
+  | "ingestedAt"
+  | "contentVersion"
+  | "sourceCreatedAt"
+  | "sourceEditedAt"
+  | "threadId"
+  | "sourceKind"
+  | "contentKind"
+> &
+  Partial<
+    Pick<
+      ChatMessage,
+      "sourceCreatedAt" | "sourceEditedAt" | "threadId" | "sourceKind" | "contentKind"
+    >
+  >;
+
+function normalizeSourceDate(value: Date | null | undefined): Date | null {
+  if (value == null) return null;
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime()) || value.getTime() < 0)
+    throw new Error("Invalid source message timestamp");
+  return new Date(Math.floor(value.getTime() / 1000) * 1000);
+}
+function dateKey(value: Date | null): number | null {
+  return value?.getTime() ?? null;
 }
 
 export class ChatHistoryRepository {
@@ -23,45 +60,120 @@ export class ChatHistoryRepository {
     this.db = drizzle(database);
   }
 
-  async save(data: Omit<ChatMessage, "id" | "createdAt">): Promise<number> {
-    try {
-      const result = await this.db
-        .insert(messages)
-        .values({
-          chatId: data.chatId,
-          messageId: data.messageId,
-          userId: data.userId,
-          userName: data.userName,
-          role: data.role,
-          content: data.content,
-          replyToMessageId: data.replyToMessageId,
-          forwardFromName: data.forwardFromName,
-        })
-        .returning({ id: messages.id });
-      return result[0]?.id ?? -1;
-    } catch (err: any) {
-      // Handle duplicate by updating (edit or re-import)
-      if (err.message?.includes("UNIQUE constraint failed")) {
-        await this.db
-          .update(messages)
-          .set({
-            content: data.content,
-            userName: data.userName,
-            replyToMessageId: data.replyToMessageId,
-            forwardFromName: data.forwardFromName,
-          })
-          .where(and(eq(messages.chatId, data.chatId), eq(messages.messageId, data.messageId)));
-        return -1;
-      }
-      throw err;
-    }
+  async save(data: ChatMessageInput): Promise<number> {
+    const result = await this.saveWithOutcome(data);
+    return result.outcome === "inserted" ? result.id : -1;
   }
 
-  async updateContent(chatId: number, messageId: number, content: string): Promise<void> {
+  async saveWithOutcome(
+    data: ChatMessageInput,
+  ): Promise<{ id: number; outcome: "inserted" | "updated" | "unchanged" }> {
+    const sourceCreatedAt = normalizeSourceDate(data.sourceCreatedAt);
+    const sourceEditedAt = normalizeSourceDate(data.sourceEditedAt);
+    const contentKind =
+      data.contentKind ??
+      (data.content === "[Media/Empty]" || data.content.startsWith("[Voice message -")
+        ? "placeholder"
+        : "text");
+    return this.db.transaction((tx) => {
+      const existing = tx
+        .select()
+        .from(messages)
+        .where(and(eq(messages.chatId, data.chatId), eq(messages.messageId, data.messageId)))
+        .get();
+      if (!existing) {
+        const inserted = tx
+          .insert(messages)
+          .values({
+            chatId: data.chatId,
+            messageId: data.messageId,
+            userId: data.userId,
+            userName: data.userName,
+            role: data.role,
+            content: data.content,
+            replyToMessageId: data.replyToMessageId,
+            forwardFromName: data.forwardFromName,
+            sourceCreatedAt,
+            sourceEditedAt,
+            threadId: data.threadId ?? null,
+            sourceKind: data.sourceKind ?? "legacy",
+            contentKind,
+            contentVersion: 1,
+          })
+          .returning({ id: messages.id })
+          .get();
+        if (!inserted) throw new Error("Message insert returned no row");
+        return { id: inserted.id, outcome: "inserted" as const };
+      }
+      const staleEdit =
+        existing.sourceEditedAt !== null &&
+        (sourceEditedAt?.getTime() ?? 0) < existing.sourceEditedAt.getTime();
+      const weakerContent =
+        (existing.contentKind === "transcription" && contentKind !== "transcription") ||
+        (existing.contentKind !== "placeholder" && contentKind === "placeholder");
+      const acceptContent = !staleEdit && !weakerContent;
+      const content = acceptContent ? data.content : existing.content;
+      const keptKind = acceptContent ? contentKind : existing.contentKind;
+      const sourceDate = existing.sourceCreatedAt ?? sourceCreatedAt;
+      const editedDate = !staleEdit && sourceEditedAt ? sourceEditedAt : existing.sourceEditedAt;
+      const threadId = existing.threadId ?? data.threadId ?? null;
+      const replyToMessageId = staleEdit
+        ? existing.replyToMessageId
+        : (data.replyToMessageId ?? existing.replyToMessageId);
+      const forwardFromName = staleEdit
+        ? existing.forwardFromName
+        : (data.forwardFromName ?? existing.forwardFromName);
+      const userName =
+        data.userName && data.userName !== String(data.userId) ? data.userName : existing.userName;
+      const sourceKind =
+        data.sourceKind && data.sourceKind !== "legacy" ? data.sourceKind : existing.sourceKind;
+      const changed =
+        sourceKind !== existing.sourceKind ||
+        content !== existing.content ||
+        keptKind !== existing.contentKind ||
+        userName !== existing.userName ||
+        threadId !== existing.threadId ||
+        replyToMessageId !== existing.replyToMessageId ||
+        forwardFromName !== existing.forwardFromName ||
+        dateKey(sourceDate) !== dateKey(existing.sourceCreatedAt) ||
+        dateKey(editedDate) !== dateKey(existing.sourceEditedAt);
+      tx.update(messages)
+        .set({
+          content,
+          contentKind: keptKind,
+          userName,
+          threadId,
+          replyToMessageId,
+          forwardFromName,
+          sourceCreatedAt: sourceDate,
+          sourceEditedAt: editedDate,
+          sourceKind,
+          contentVersion: existing.contentVersion + (changed ? 1 : 0),
+        })
+        .where(eq(messages.id, existing.id))
+        .run();
+      return { id: existing.id, outcome: changed ? ("updated" as const) : ("unchanged" as const) };
+    });
+  }
+
+  async updateContent(
+    chatId: number,
+    messageId: number,
+    content: string,
+    contentKind: ChatMessage["contentKind"] = "text",
+  ): Promise<void> {
     await this.db
       .update(messages)
-      .set({ content })
-      .where(and(eq(messages.chatId, chatId), eq(messages.messageId, messageId)));
+      .set({ content, contentKind, contentVersion: sql`${messages.contentVersion} + 1` })
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          eq(messages.messageId, messageId),
+          sql`(${messages.content} != ${content} OR ${messages.contentKind} != ${contentKind})`,
+          // A late failure placeholder must never replace successful speech/text.
+          ...(contentKind === "placeholder" ? [eq(messages.contentKind, "placeholder")] : []),
+        ),
+      );
   }
 
   async deleteByMessageIds(chatId: number, messageIds: number[]): Promise<void> {
@@ -76,7 +188,7 @@ export class ChatHistoryRepository {
       .select()
       .from(messages)
       .where(eq(messages.chatId, chatId))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.messageId))
       .limit(limit);
     return rows.reverse().map((row) => this.mapRow(row));
   }
@@ -93,11 +205,11 @@ export class ChatHistoryRepository {
       .where(
         and(
           eq(messages.chatId, chatId),
-          sql`${messages.createdAt} >= ${Math.floor(startTime.getTime() / 1000)}`,
-          sql`${messages.createdAt} <= ${Math.floor(endTime.getTime() / 1000)}`,
+          sql`${messages.sourceCreatedAt} >= ${Math.floor(startTime.getTime() / 1000)}`,
+          sql`${messages.sourceCreatedAt} <= ${Math.floor(endTime.getTime() / 1000)}`,
         ),
       )
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.messageId))
       .limit(limit);
     return rows.reverse().map((row) => this.mapRow(row));
   }
@@ -107,7 +219,7 @@ export class ChatHistoryRepository {
       .select({ id: messages.id })
       .from(messages)
       .where(eq(messages.chatId, chatId))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.messageId))
       .limit(keepCount)
       .as("keep");
 
@@ -190,17 +302,17 @@ export class ChatHistoryRepository {
     }
 
     const earliest = await this.db
-      .select({ createdAt: messages.createdAt })
+      .select({ createdAt: messages.sourceCreatedAt })
       .from(messages)
-      .where(eq(messages.chatId, chatId))
-      .orderBy(messages.createdAt)
+      .where(and(eq(messages.chatId, chatId), sql`${messages.sourceCreatedAt} IS NOT NULL`))
+      .orderBy(messages.sourceCreatedAt)
       .limit(1);
 
     const latest = await this.db
-      .select({ createdAt: messages.createdAt })
+      .select({ createdAt: messages.sourceCreatedAt })
       .from(messages)
-      .where(eq(messages.chatId, chatId))
-      .orderBy(desc(messages.createdAt))
+      .where(and(eq(messages.chatId, chatId), sql`${messages.sourceCreatedAt} IS NOT NULL`))
+      .orderBy(desc(messages.sourceCreatedAt))
       .limit(1);
 
     return {
@@ -221,7 +333,14 @@ export class ChatHistoryRepository {
       content: row.content,
       replyToMessageId: row.replyToMessageId,
       forwardFromName: row.forwardFromName,
-      createdAt: row.createdAt ?? new Date(),
+      createdAt: row.createdAt ?? new Date(0),
+      ingestedAt: row.createdAt,
+      sourceCreatedAt: row.sourceCreatedAt,
+      sourceEditedAt: row.sourceEditedAt,
+      threadId: row.threadId,
+      sourceKind: row.sourceKind,
+      contentKind: row.contentKind,
+      contentVersion: row.contentVersion,
     };
   }
 }

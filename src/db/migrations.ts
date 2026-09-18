@@ -1,6 +1,15 @@
 import type { Database } from "bun:sqlite";
 
-const MIGRATION_ID = "2026_09_15_schema_readiness_v1";
+const BASE_MIGRATION_ID = "2026_09_15_schema_readiness_v1";
+const MIGRATION_ID = "2026_09_18_canonical_history_v2";
+const CANONICAL_COLUMNS = {
+  source_created_at: "INTEGER",
+  source_edited_at: "INTEGER",
+  thread_id: "INTEGER",
+  source_kind: "TEXT NOT NULL DEFAULT 'legacy'",
+  content_kind: "TEXT NOT NULL DEFAULT 'text'",
+  content_version: "INTEGER NOT NULL DEFAULT 1",
+};
 
 const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   messages: [
@@ -142,6 +151,24 @@ function assertCompatibleExistingTables(db: Database): void {
   }
 }
 
+function migrateCanonicalHistory(db: Database): void {
+  const existing = new Map(
+    db
+      .query<{ name: string; type: string }, []>("PRAGMA table_info(messages)")
+      .all()
+      .map((row) => [row.name, row.type.toUpperCase()]),
+  );
+  for (const [name, declaration] of Object.entries(CANONICAL_COLUMNS)) {
+    const type = existing.get(name);
+    if (type !== undefined && type !== declaration.split(" ")[0])
+      throw new Error(`Incompatible canonical message column ${name}`);
+    if (type === undefined) db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${declaration}`);
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS messages_chat_source_date ON messages(chat_id, source_created_at, message_id)",
+  );
+}
+
 function duplicateMessageGroupCount(db: Database): number {
   if (!tableExists(db, "messages")) return 0;
   return (
@@ -181,12 +208,14 @@ export function migrateApplicationDatabase(db: Database): MigrationResult {
     db.exec(TABLE_DDL);
     const messagesDeduplicated = deduplicateMessagesKeepLatest(db);
     db.exec(INDEX_DDL);
+    migrateCanonicalHistory(db);
     db.exec(`
       CREATE TABLE IF NOT EXISTS app_schema_migrations (
         id TEXT PRIMARY KEY NOT NULL,
         applied_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
     `);
+    db.query("INSERT OR IGNORE INTO app_schema_migrations (id) VALUES (?)").run(BASE_MIGRATION_ID);
     const exists = db
       .query<{ id: string }, [string]>("SELECT id FROM app_schema_migrations WHERE id = ? LIMIT 1")
       .get(MIGRATION_ID);
@@ -225,8 +254,20 @@ export function assertDatabaseReady(db: Database): void {
   if (duplicates > 0) {
     throw new Error(`Database is not ready: ${duplicates} duplicate message key group(s)`);
   }
-  const migration = db
-    .query<{ id: string }, [string]>("SELECT id FROM app_schema_migrations WHERE id = ? LIMIT 1")
-    .get(MIGRATION_ID);
-  if (!migration) throw new Error(`Database is not ready: migration ${MIGRATION_ID} not recorded`);
+  const present = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(messages)")
+      .all()
+      .map((row) => row.name),
+  );
+  for (const name of Object.keys(CANONICAL_COLUMNS)) {
+    if (!present.has(name))
+      throw new Error(`Database is not ready: missing canonical column ${name}`);
+  }
+  for (const id of [BASE_MIGRATION_ID, MIGRATION_ID]) {
+    const migration = db
+      .query<{ id: string }, [string]>("SELECT id FROM app_schema_migrations WHERE id = ? LIMIT 1")
+      .get(id);
+    if (!migration) throw new Error(`Database is not ready: migration ${id} not recorded`);
+  }
 }
