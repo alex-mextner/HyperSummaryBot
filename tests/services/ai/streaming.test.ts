@@ -19,6 +19,10 @@ function setClientResponse(
         for (const chunk of chunks) {
           yield chunk;
         }
+        const hasTools = chunks.some((chunk) =>
+          chunk.choices?.some((choice: any) => choice.delta?.tool_calls),
+        );
+        yield { choices: [{ delta: {}, finish_reason: hasTools ? "tool_calls" : "stop" }] };
       },
     };
   });
@@ -108,7 +112,11 @@ describe("aiStreamRound", () => {
             {
               delta: {
                 tool_calls: [
-                  { index: 0, function: { name: "search_messages", arguments: '{"q":' } },
+                  {
+                    index: 0,
+                    id: "synthetic_call_1",
+                    function: { name: "search_messages", arguments: '{"q":' },
+                  },
                 ],
               },
             },
@@ -127,7 +135,16 @@ describe("aiStreamRound", () => {
     });
 
     const result = await aiStreamRound(
-      { messages: [{ role: "user", content: "Hi" }], maxTokens: 10, tools: [] },
+      {
+        messages: [{ role: "user", content: "Hi" }],
+        maxTokens: 10,
+        tools: [
+          {
+            type: "function",
+            function: { name: "search_messages", parameters: { type: "object" } },
+          },
+        ],
+      },
       {},
     );
 

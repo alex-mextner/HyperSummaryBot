@@ -12,6 +12,7 @@ describe("extractNote", () => {
           yield {
             choices: [
               {
+                finish_reason: "stop",
                 delta: {
                   content: JSON.stringify({
                     title: "Team sync notes",
@@ -53,6 +54,7 @@ describe("extractNote", () => {
         yield {
           choices: [
             {
+              finish_reason: "stop",
               delta: {
                 content:
                   '```json\n{"title":"Test","summary":"ok","keyPoints":[],"decisions":[],"actionItems":[],"tags":[]}\n```',
@@ -72,7 +74,7 @@ describe("extractNote", () => {
     (client as any).chat.completions.create = async () => ({
       [Symbol.asyncIterator]: async function* () {
         yield {
-          choices: [{ delta: { content: "This is not JSON at all" } }],
+          choices: [{ delta: { content: "This is not JSON at all" }, finish_reason: "stop" }],
         };
       },
     });

@@ -31,7 +31,9 @@ describe("generateSummary", () => {
       capturedParams = params;
       return {
         [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: "Mock response [msg:101]" } }] };
+          yield {
+            choices: [{ delta: { content: "Mock response [msg:101]" }, finish_reason: "stop" }],
+          };
         },
       };
     };
@@ -119,7 +121,7 @@ describe("generateSummary", () => {
     const client = zaiClient();
     (client as any).chat.completions.create = async () => ({
       [Symbol.asyncIterator]: async function* () {
-        yield { choices: [{ delta: { content: "Факт [msg:999]" } }] };
+        yield { choices: [{ delta: { content: "Факт [msg:999]" }, finish_reason: "stop" }] };
       },
     });
     await expect(
@@ -135,7 +137,7 @@ describe("generateSummary", () => {
     const client = zaiClient();
     (client as any).chat.completions.create = async () => ({
       [Symbol.asyncIterator]: async function* () {
-        yield { choices: [{ delta: { content: "Факт без источника" } }] };
+        yield { choices: [{ delta: { content: "Факт без источника" }, finish_reason: "stop" }] };
       },
     });
     await expect(
@@ -159,6 +161,6 @@ describe("generateSummary", () => {
         messages: [{ userId: 1, userName: "User", content: "Test", messageId: 101 }],
         bot: createMockBot() as any,
       }),
-    ).rejects.toThrow("AI failure");
+    ).rejects.toThrow("AI provider request failed");
   });
 });
