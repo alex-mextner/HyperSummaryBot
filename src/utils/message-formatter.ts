@@ -42,13 +42,14 @@ export function buildUserLookup(
 /** Format messages for AI prompt with names only.
  *  Raw userId is NEVER exposed to the AI. */
 export function formatMessagesForPrompt(
-  messages: Array<{ userId: number; userName: string | null; content: string }>,
+  messages: Array<{ userId: number; userName: string | null; content: string; messageId?: number }>,
 ): { text: string; lookup: UserLookup } {
   const lookup = buildUserLookup(messages);
 
   const lines = messages.map((m) => {
     const name = lookup.names.get(m.userId) ?? "Unknown";
-    return `${name}: ${m.content}`;
+    const source = m.messageId === undefined ? "" : `[msg:${m.messageId}] `;
+    return `${source}${name}: ${m.content}`;
   });
 
   return {

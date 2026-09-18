@@ -31,7 +31,7 @@ describe("generateSummary", () => {
       capturedParams = params;
       return {
         [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: "Mock response" } }] };
+          yield { choices: [{ delta: { content: "Mock response [msg:101]" } }] };
         },
       };
     };
@@ -40,7 +40,7 @@ describe("generateSummary", () => {
   test("calls aiStreamRound with combined system prompt", async () => {
     const result = await generateSummary({
       chatId: 1,
-      messages: [{ userId: 1, userName: "Alice", content: "Hello" }],
+      messages: [{ userId: 1, userName: "Alice", content: "Hello", messageId: 101 }],
       bot: createMockBot() as any,
     });
 
@@ -56,7 +56,7 @@ describe("generateSummary", () => {
   test("exposes only read-only summary tools", async () => {
     await generateSummary({
       chatId: 1,
-      messages: [{ userId: 1, userName: "Alice", content: "I owe Bob 10 EUR" }],
+      messages: [{ userId: 1, userName: "Alice", content: "I owe Bob 10 EUR", messageId: 101 }],
       bot: createMockBot() as any,
     });
 
@@ -73,15 +73,15 @@ describe("generateSummary", () => {
     await generateSummary({
       chatId: 1,
       messages: [
-        { userId: 1, userName: "Alice", content: "Msg A" },
-        { userId: 2, userName: "Bob", content: "Msg B" },
+        { userId: 1, userName: "Alice", content: "Msg A", messageId: 101 },
+        { userId: 2, userName: "Bob", content: "Msg B", messageId: 102 },
       ],
       bot: createMockBot() as any,
     });
 
     const userPrompt = capturedParams.messages[1].content as string;
-    expect(userPrompt).toContain("Alice: Msg A");
-    expect(userPrompt).toContain("Bob: Msg B");
+    expect(userPrompt).toContain("[msg:101] Alice: Msg A");
+    expect(userPrompt).toContain("[msg:102] Bob: Msg B");
     expect(userPrompt).toContain("---");
     expect(userPrompt).not.toContain("1 →");
     expect(userPrompt).not.toContain("2 →");
@@ -93,7 +93,7 @@ describe("generateSummary", () => {
     await generateSummary({
       chatId: -100123,
       replyToChatId: 42,
-      messages: [{ userId: 1, userName: "Alice", content: "Hello" }],
+      messages: [{ userId: 1, userName: "Alice", content: "Hello", messageId: 101 }],
       bot: bot as any,
     });
 
@@ -106,13 +106,45 @@ describe("generateSummary", () => {
   test("returns result text", async () => {
     const result = await generateSummary({
       chatId: 1,
-      messages: [{ userId: 1, userName: "User", content: "Test" }],
+      messages: [{ userId: 1, userName: "User", content: "Test", messageId: 101 }],
       bot: createMockBot() as any,
     });
 
     expect(result).toContain("Mock response");
     // Footer with metadata is appended
     expect(result).toContain("📊");
+  });
+
+  test("rejects hallucinated source message IDs", async () => {
+    const client = zaiClient();
+    (client as any).chat.completions.create = async () => ({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { content: "Факт [msg:999]" } }] };
+      },
+    });
+    await expect(
+      generateSummary({
+        chatId: 1,
+        messages: [{ userId: 1, userName: "Alice", content: "Hello", messageId: 101 }],
+        bot: createMockBot() as any,
+      }),
+    ).rejects.toThrow("unknown source message IDs");
+  });
+
+  test("requires a source reference when message IDs are available", async () => {
+    const client = zaiClient();
+    (client as any).chat.completions.create = async () => ({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { content: "Факт без источника" } }] };
+      },
+    });
+    await expect(
+      generateSummary({
+        chatId: 1,
+        messages: [{ userId: 1, userName: "Alice", content: "Hello", messageId: 101 }],
+        bot: createMockBot() as any,
+      }),
+    ).rejects.toThrow("no valid source message references");
   });
 
   test("deletes message when AI throws", async () => {
@@ -124,7 +156,7 @@ describe("generateSummary", () => {
     await expect(
       generateSummary({
         chatId: 1,
-        messages: [{ userId: 1, userName: "User", content: "Test" }],
+        messages: [{ userId: 1, userName: "User", content: "Test", messageId: 101 }],
         bot: createMockBot() as any,
       }),
     ).rejects.toThrow("AI failure");
