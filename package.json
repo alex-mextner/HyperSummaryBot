@@ -17,7 +17,9 @@
     "db:migrate:drizzle": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "test": "bun test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "mtproto:connect": "bun scripts/connect-mtproto.ts",
+    "mtproto:revoke": "bun scripts/revoke-mtproto.ts"
   },
   "dependencies": {
     "@gramio/session": "latest",
