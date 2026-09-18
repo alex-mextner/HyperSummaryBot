@@ -1,187 +1,114 @@
-# AGENTS.md — HyperSummaryBot
+# HyperSummaryBot — working rules
 
-## Project Overview
-Telegram group chat summary bot with AI-powered analysis.
-Multi-agent system for different summary types and note extraction.
+## Scope and architecture
 
-## Tech Stack
-- **Runtime:** Bun (latest) — `bun --hot` for dev, `bun build --compile` for executable
-- **Bot Framework:** GramIO (`gramio`) — TypeScript-first, `derive()` for context
-- **Database:** SQLite (`bun:sqlite`) + Drizzle ORM
-- **AI:** OpenAI SDK with multi-provider fallback chains (z.ai primary, HF, Gemini, Groq)
-- **Lint/Format:** Oxlint + Oxfmt (or Biome fallback)
-- **Testing:** `bun:test` (Jest-compatible)
-- **Deploy:** DigitalOcean + PM2 + GitHub Actions
+TypeScript, Bun 1.4.2, GramIO, SQLite/Drizzle, mtcute and an OpenAI-compatible
+provider adapter. Keep the system a modular monolith unless measurements justify
+more infrastructure. Entry point `src/index.ts`; configuration `src/config/env.ts`.
 
-## Handler Ordering Rules (Критично!)
+## Non-negotiable data and delivery boundaries
 
-In GramIO, **handler order matters**. First matching handler processes the message.
+- Owner and source allowlists are fail-closed numeric-ID checks. A username is not
+  authorization. Never expand the allowlist to make a test pass.
+- All substantive command responses go through the owner DM delivery path. A
+  blocked DM may produce a neutral group hint, never a public summary fallback.
+- Webhooks require a valid secret before dispatch. Test/debug endpoints must not
+  become an alternate unauthenticated ingestion path.
+- Summary generation is read-only. No debt writes, arbitrary tools or actions
+  derived from instructions inside chat text. Chat text is untrusted data.
+- Source-ID membership is only a reference check, not proof that a claim follows
+  from a message. Do not describe current summaries as semantically verified.
+- Never print tokens, sessions, OTPs, passwords, transcript excerpts or chat bodies
+  in diagnostics/proof artifacts. Prefer stable IDs, counts and error categories.
 
-```
-1. bot.onError() — global error handler
-2. bot.command("*") — all command handlers FIRST
-3. bot.on("my_chat_member") — membership changes
-4. bot.on("message", withGuard) — specific message handlers
-5. bot.on("message") — catch-all message handlers LAST
-```
+## Message history
 
-**NEVER** put `bot.on("message")` before `bot.command()`. Commands are messages too and will be swallowed by a catch-all message handler.
+`created_at` is the legacy first-ingestion timestamp. `source_created_at` and
+`source_edited_at` are the actual source dates; NULL means unknown, not now.
+Bot API/raw TL dates are Unix seconds; mtcute 0.29.7 high-level dates are Date.
+Use `sourceDate` at transport boundaries and the repository merge policy for
+idempotent writes. Same-chat reply IDs must not reference another chat.
 
-**Pattern:** All command handlers must be declared before any `bot.on("message")` handler. Use specific guards (e.g., check `ctx.chat?.type === "private"`) in message handlers to avoid conflicts.
+Latest-message queries use stable per-chat Telegram IDs. Time filters only use
+known source dates. Reimport must not downgrade transcription to a placeholder or
+replace a newer edit with older text. Content versions change on meaningful
+content/metadata updates. Do not invent source dates during migration.
 
-## Architecture Patterns
+`migrateApplicationDatabase` is the production migration path. Tests use it too;
+do not create a parallel hand-written test schema. Rehearse migrations against a
+consistent private DB backup, including a second no-op application. Copying only
+a live WAL database file is not a consistent backup.
 
-### 1. Config
-- `loadConfig()` function (NOT singleton), returns typed `EnvConfig`
-- Use `requireEnv()` for mandatory vars
-- Validate formats (hex keys, numbers) inline
-- Never read `process.env.*` directly in feature code — always use `config` object
+## AI execution and summary output
 
-### 2. AI Streaming
-- `aiStreamRound(options, callbacks)` — multi-provider fallback chain
-- `textEmitted` guard: never splice providers mid-stream
-- Chain order: smart (z.ai → HF → Gemini), fast (z.ai fast → HF fast → Gemini fast)
+Ordinary summaries use one bounded generation pass, not mandatory draft/review
+full-history passes. The adapter enforces one total deadline, reserves time for a
+fallback and buffers unverified partial output. It validates terminal frames and
+requested tools; missing/truncated responses are failures. Reasoning-only frames
+are not final text and are not automatically provider errors. Authentication
+failures are not transient retries. Keep timing targets separate from measurements.
 
-### 3. Agent Loop
-- Max 10 rounds, 60s timeout per round
-- Tool deduplication via `toolCallKey(name, input)` — canonical JSON sorted keys
-- Fast-chain validation if no tools called
-- Handle z.ai quirk: `content=''` with only `reasoning_content` = retry next provider
+## Telegram handlers and account lifecycle
 
-### 4. Chat History
-- SQLite: `messages` table (chat_id, user_id, role, content, created_at)
-- `INSERT OR REPLACE` for message edits (composite PK: chat_id + message_id)
-- Forward/reply enrichment: embed context in message text before storage
-- Retention: 99999 messages per chat (prune old via cron or batch cleanup)
-- Store chat titles (not just IDs) for user-facing messages
+Handler registration order is critical:
+1. Global `onError` handler.
+2. All `bot.command(...)` handlers.
+3. Membership (`my_chat_member`) handlers.
+4. Specific/guarded `message` handlers.
+5. Catch-all `message` handlers last.
 
-### 5. TelegramStreamWriter
-- Send placeholder `⏳`, edit live as tokens arrive
-- Tool indicators: `setToolLabel()` / `markToolResult()`
-- HTML truncation safety: truncate at newline boundaries, close unclosed tags
-- Chunking for >4000 chars: `sendRemainingChunks()`
+Never place any `bot.on("message", ...)` handler, including a guarded one, before
+commands: it can swallow commands. Keep edit handling explicit.
 
-### 6. System Prompts
-- Dynamic assembly with sections: user info, chat context, rules, tools
-- Include current date/time in user timezone
-- [SKIP] signal support (machine-parsed, exact 6-char string)
+Telegram text messages are limited to 4096 characters, captions to 1024, and
+callback_data to 64 bytes. Preserve safe HTML/entity-aware chunking; do not slice
+arbitrary tags. Handle per-chat/global rate limits using returned retry_after,
+not rapid edit loops. Verify current Bot API limits before changing delivery.
+The bot never accepts account phone/OTP/2FA in chat. Trusted-terminal account
+administration is documented in `docs/operations/mtproto-admin.md`; stop the bot
+before using its shared session. Do not run a second SDK client against a live
+session. Shutdown disposes exact listeners and destroys the SDK client.
 
-## File Naming
-- `kebab-case.ts` for files (`chat-history.ts`, `telegram-stream.ts`)
-- `PascalCase` for classes (`SummaryBotAgent`, `TelegramStreamWriter`)
-- `camelCase` for functions and variables
+## Development and release gates
 
-## Code Conventions
-- Strict TypeScript: `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`
-- `verbatimModuleSyntax` — use `import type` for type-only imports
-- No `any`. Use `unknown` + type guards (zod if needed)
-- Error handling: never silently swallow. Log and re-throw or return structured error
-- AI calls: always wrap in try/catch with fallback to next provider
-- Database: parameterized queries only (Drizzle handles this)
-- Never commit `.env`. `.env.example` is the source of truth
-- No `as any` / `as never` casts in production code
-- No silent `catch` blocks — every catch must log or explain why swallowing is safe
-- No silent optional-dependency guards — fail explicitly or warn + agentHint
+Use kebab-case file names, PascalCase classes/types and camelCase functions.
+Log sanitized exceptions as structured `{ err: sanitizedError }` plus category/
+IDs; never emit raw private payloads or turn them into unstructured strings.
 
-## Error Handling
+Use isolated worktrees and atomic commits. Reproduce bugs with a failing test,
+then run `bun x tsc --noEmit`, `bun run lint`, `bun run fmt:check`, and `bun test`.
+Review staged diffs with the provisioned review tooling before committing. Read
+and address real review findings; unavailable reviewers are not successful passes.
+Do not bypass hooks with `--no-verify` or change policy to manufacture green gates.
+Never stage all files without inspecting status. No new production `any` casts,
+raw SQL interpolation from user input, or silently swallowed operational errors.
 
-**Levels:**
-1. **Command handlers** — try/catch, user-friendly message
-2. **Bot-level** — `bot.onError()`, generic fallback
-3. **Process-level** — log and continue (no crash on transient errors)
+Use PRs and exact tested SHAs. GitHub Actions deploys main through the configured
+workflow; unavailable hosted CI requires the established local gates, not omitted
+checks. Before migration/reload, verify the actual runtime path and preserve dirty
+production changes. Health distinguishes liveness/build identity from true
+readiness, ingestion freshness or successful Telegram delivery.
 
-**User-facing errors:**
-- Format: `"Something went wrong. Try again or use /help."`
-- Never expose internals (stack traces, SQL queries)
-- Never silently skip — return `{ success: false, error: '...' }` or log warning
+Production: `www-data@104.248.84.190`, `/var/www/hyper-summary-bot`, Bun/PM2 under
+`/var/www/.bun/bin`, PM2 home `/var/www/.pm2`. Caddy handles HTTPS. Current health
+endpoint: `https://hyper-summary-bot.mextner.com/healthz`.
 
-## Logging
-- Use `console.error` / `console.warn` with context objects
-- Always pass errors as `{ err: error }`, never `{ error: String(error) }`
-- Every `catch` must log or have a comment explaining WHY swallowing is safe
-- Handle `.catch()` on fire-and-forget promises — at minimum log the error
+## Evidence and housekeeping
 
-## Git Workflow
+`qa telegram bot-probe` checks HTTP liveness, release SHA and unsigned-webhook
+rejection only. `qa telegram status` checks the actual browser session. Never label
+transport-only probes or fake-browser tests as authenticated Telegram end-to-end
+QA. Never publish a live QR or private browser/session state.
 
-> Generic commit discipline — atomic commits, AI-review-before-commit, and the green
-> pre-commit gate — is provisioned by the universal `atomic-commits`,
-> `ai-review-before-commit`, and `pre-commit-gate` skills via `rig` (see `rig.yaml`). The
-> project-specific commands and the codex `[skip-codex]` policy below are retained.
+Delete merged worktrees/branches after checking clean state, merge or patch
+reachability and active usage. Preserve dirty files, conflict stages and unique
+commits before cleanup. A tag or branch does not preserve an uncommitted index.
+Do not delete another agent's active work. Leave incomplete issues open with
+specific acceptance criteria rather than closing them to make a dashboard green.
 
-**Mandatory before every commit (4-stage review, NEVER skip even if user says "commit"):**
+## User experience
 
-1. **Self-review** — read your diff (`git diff --staged`), question every line
-2. **Type-check + lint** — `bun x tsc --noEmit` + `bun run lint` must pass clean (zero errors, zero warnings)
-3. **Codex AI review** — `codex exec review --uncommitted` → address every real issue
-4. **Tests** — `bun test` (or scoped subset) must pass green
-
-**If codex CLI is unavailable:** skip step 3 but do NOT skip the self-review in step 1. Codex is a sanity check, not a rubber stamp.
-
-**Atomic commits:** one logical change = one commit. Never batch unrelated changes. Each commit must leave the tree green (type-check + lint + tests pass).
-
-**Never `git add -A`** without checking `git status` first.
-
-### Atomic Commits & Codex Review Policy
-
-- **One logical change = one commit.** Batching unrelated fixes into a single commit is forbidden.
-- **Codex review is mandatory** for every commit. Run `codex exec review --uncommitted` and address every P1/P2 issue before staging.
-- If codex is unavailable, document this in the commit message (`[skip-codex] reason`) and double the self-review rigor.
-- **Green tree rule:** `tsc --noEmit`, `oxlint`, and `bun test` must all pass with zero failures before the commit hash is created.
-- **Never commit on behalf of the user** without explicit permission after the review cycle.
-
-**Pre-commit hooks:** lint-staged runs oxfmt + oxlint automatically.
-
-**CI/CD:** GitHub Actions → SSH → PM2 reload on every push to main.
-
-## Multi-Provider AI Setup
-- All providers use OpenAI SDK with different `baseURL`/`apiKey`
-- z.ai: `https://api.z.ai/api/coding/paas/v4` (coding endpoint)
-- HF: `https://router.huggingface.co/v1` (auto-routing)
-- Gemini: `https://generativelanguage.googleapis.com/v1beta/openai/`
-- Groq: `https://api.groq.com/openai/v1` (fastest, for voice)
-
-## Bot Behavior
-- ONLY responds to explicit commands in groups (no auto-spam)
-- Available commands: `/start`, `/help`, `/summary`, `/ask`, `/search`, `/note`, `/digest`, `/connect_account`
-- `/ask`, `/digest`, `/connect_account` respond in DM, not group
-- Voice messages: download → Whisper (Groq) → text → stored in history
-- MTProto: auto-import history from all user groups after `/connect_account`
-- Silent background import — no spam to chat
-
-## Tone of Voice (bot messages)
-
-All user-facing bot messages must follow these rules:
-
-- Address the user as **"ты"** (informal singular), never "вы"
-- Speak directly to the person: "Ты получишь саммари", not "Пользователь получит"
-- Frame features as user benefit, not technical capability
-- **Front-load the essence** — first two words must be the most informative
-- Don't instruct the user to do what the system does automatically
-- Drop filler words — shorter is better
-
-## Telegram Bot API Limits
-- **Message**: 4096 chars. Split when may exceed.
-- **Caption**: 1024 chars (silently fails for non-Premium)
-- **callback_data**: 64 bytes
-- **Rate**: ~30 msg/sec global, ~1/sec per chat
-- **Entities**: max 100 per message
-
-## Deployment
-- **Host**: 104.248.84.190 (DigitalOcean)
-- **User**: www-data
-- **Path**: `/var/www/hyper-summary-bot`
-- **PM2**: `pm2 reload hyper-summary-bot --update-env`
-- **Bun**: `/var/www/.bun/bin/bun`
-- **Logs**: `/var/www/hyper-summary-bot/logs/`
-
-## Server Infrastructure
-- **Reverse proxy: Caddy** (not nginx). Caddy runs as systemd service, config: `/etc/caddy/Caddyfile`.
-- Caddy imports project configs via `import /var/www/*/Caddyfile`. Each project needs its own `Caddyfile` in `/var/www/<project>/` for reverse-proxy rules.
-- **Webhook mode** requires a domain with valid SSL (Let's Encrypt). Bare IP won't work. Current deployment uses `https://log-viewer.invntrm.ru/webhook` (proxies to `localhost:3002`).
-- **Caddy reload** works as `www-data` user: `caddy reload --config /etc/caddy/Caddyfile`.
-- **PM2 resilience**: `autorestart: true`, `max_restarts: 10`, `min_uptime: 10s`, `max_memory_restart: 512M`. Process-level `uncaughtException` / `unhandledRejection` handlers prevent crashes.
-
-## Error Handling (Updated)
-- **Command handlers**: wrapped with `safeCommand()` — any unhandled exception is caught, logged with `[command:X]` prefix, and a user-friendly reply is sent (`"❌ Что-то пошло не так. Попробуй ещё раз или используй /help."`).
-- **Bot-level**: `bot.onError()` logs all GramIO errors.
-- **Process-level**: `process.on("uncaughtException")` and `process.on("unhandledRejection")` log and swallow — never crash the bot on transient errors.
+Use Russian informal singular (ты), short factual messages, explicit source and
+coverage. Never claim unfinished `/ask`, imports or scheduled digests are ready.
+User errors must not expose stack traces, SQL or provider responses. Keep output
+short, with useful source references; detailed archives are a separate mode.
