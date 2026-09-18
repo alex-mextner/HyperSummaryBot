@@ -14,6 +14,8 @@ export interface StreamRoundOptions {
   temperature?: number;
   fast?: boolean;
   signal?: AbortSignal;
+  deadlineMs?: number;
+  maxProviders?: number;
 }
 
 export interface StreamRoundResult {
@@ -83,69 +85,67 @@ export async function aiStreamRound(
   options: StreamRoundOptions,
   callbacks: StreamCallbacks,
 ): Promise<StreamRoundResult> {
-  const chain = buildChain(options.fast ?? false);
-  let textEmitted = false;
-  const fullText = { current: "" };
-  const toolCalls: Array<{ name: string; arguments: string; id: string }> = [];
-
-  const wrappedCallbacks: StreamCallbacks = {
-    onTextDelta: (text) => {
-      textEmitted = true;
-      fullText.current += text;
-      callbacks.onTextDelta?.(text);
-    },
-    onToolCallStart: callbacks.onToolCallStart,
-    onToolCallResult: callbacks.onToolCallResult,
-  };
-
-  console.log(
-    `[ai] Round start — chain=${chain.map((s) => s.name).join(", ")}, messages=${options.messages.length}, max_tokens=${options.maxTokens}`,
+  const chain = buildChain(options.fast ?? false).slice(0, options.maxProviders ?? 2);
+  const controller = new AbortController();
+  const deadlineMs = options.deadlineMs ?? 20_000;
+  const timer = setTimeout(
+    () => controller.abort(new Error(`AI deadline exceeded after ${deadlineMs}ms`)),
+    deadlineMs,
   );
-  for (const slot of chain) {
-    try {
-      const result = await streamFromProvider(slot, options, wrappedCallbacks, fullText, toolCalls);
-      console.log(`[ai] Round complete via ${slot.name} — ${result.text.length} chars`);
-      return result;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      const status = (error as any)?.status ?? "no-status";
-      // Partial output recovery: if we got some text but the model died,
-      // and output is very short, treat as retryable and ask next model to continue.
-      if (textEmitted && fullText.current.length < 500) {
-        console.warn(
-          `[ai] ${slot.name} PARTIAL FAILURE (${fullText.current.length} chars) — trying next provider with continuation context...`,
+  const abortFromParent = () => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) abortFromParent();
+  else options.signal?.addEventListener("abort", abortFromParent, { once: true });
+
+  const originalMessages = options.messages;
+  console.log(
+    `[ai] Round start — chain=${chain.map((s) => s.name).join(", ")}, messages=${originalMessages.length}, max_tokens=${options.maxTokens}, deadline_ms=${deadlineMs}`,
+  );
+  try {
+    for (const slot of chain) {
+      if (controller.signal.aborted)
+        throw controller.signal.reason ?? new Error("AI request aborted");
+      const fullText = { current: "" };
+      const toolCalls: Array<{ name: string; arguments: string; id: string }> = [];
+      const attemptCallbacks: StreamCallbacks = {
+        onTextDelta: (text) => {
+          fullText.current += text;
+          callbacks.onTextDelta?.(text);
+        },
+        onToolCallStart: callbacks.onToolCallStart,
+        onToolCallResult: callbacks.onToolCallResult,
+      };
+      try {
+        const result = await streamFromProvider(
+          slot,
+          { ...options, messages: originalMessages, signal: controller.signal },
+          attemptCallbacks,
+          fullText,
+          toolCalls,
         );
-        // Inject partial output as an assistant message so next model can continue
-        options.messages = [
-          ...options.messages,
-          { role: "assistant", content: fullText.current },
-          {
-            role: "user",
-            content: "Продолжи с того места, где оборвался текст выше. Допиши оставшиеся секции.",
-          },
-        ];
-        fullText.current = ""; // reset accumulator for next model
-        continue;
-      }
-      if (textEmitted) {
-        console.error(
-          `[ai] ${slot.name} FAILED after text already emitted — aborting round. status=${status}, error=${msg}`,
-        );
+        if (!result.text.trim() && result.toolCalls.length === 0) {
+          throw new EmptyProviderResponseError(slot.name);
+        }
+        console.log(`[ai] Round complete via ${slot.name} — ${result.text.length} chars`);
+        return result;
+      } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason ?? error;
+        const msg = error instanceof Error ? error.message : String(error);
+        const status = (error as any)?.status ?? "no-status";
+        if (isRetryableError(error)) {
+          console.warn(
+            `[ai] ${slot.name} FAILED (retryable) — status=${status}, error=${msg}. Trying next...`,
+          );
+          continue;
+        }
+        console.error(`[ai] ${slot.name} FAILED (non-retryable) — status=${status}, error=${msg}`);
         throw error;
       }
-      if (isRetryableError(error)) {
-        console.warn(
-          `[ai] ${slot.name} FAILED (retryable) — status=${status}, error=${msg}. Trying next...`,
-        );
-        continue;
-      }
-      console.error(`[ai] ${slot.name} FAILED (non-retryable) — status=${status}, error=${msg}`);
-      throw error;
     }
+    throw new Error(`All ${chain.length} AI providers failed`);
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abortFromParent);
   }
-
-  console.error(`[ai] All ${chain.length} providers failed`);
-  throw new Error("All AI providers failed");
 }
 
 async function streamFromProvider(
@@ -195,10 +195,7 @@ async function streamFromProvider(
       !delta?.tool_calls &&
       (delta as Record<string, unknown>)?.reasoning_content
     ) {
-      console.warn(
-        `[ai] ${slot.name} returned empty content with reasoning_content only — treating as empty response`,
-      );
-      throw new EmptyProviderResponseError(slot.name);
+      continue;
     }
 
     if (delta?.content) {
