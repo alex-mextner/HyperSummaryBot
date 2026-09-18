@@ -2,6 +2,7 @@ import type OpenAI from "openai";
 import { aiStreamRound } from "../services/ai/streaming";
 import { TelegramStreamWriter } from "../services/ai/telegram-stream";
 import {
+  type PromptMessage,
   formatMessagesForPrompt,
   containsRawUserIds,
   sanitizeAttributions,
@@ -13,7 +14,7 @@ type AnyBot = any;
 interface SummaryAgentOptions {
   chatId: number;
   replyToChatId?: number;
-  messages: Array<{ userId: number; userName: string | null; content: string; messageId?: number }>;
+  messages: PromptMessage[];
   bot: AnyBot;
   placeholderText?: string;
 }
@@ -23,6 +24,7 @@ const SUMMARY_SYSTEM_PROMPT = `Ты — ассистент для кратког
 ЗАДАЧА:
 - Выбери только 3–7 наиболее полезных фактов: решения, изменения, действия, важные вопросы и конкретные договорённости.
 - Обычно уложись в 120–180 русских слов. Если полезных фактов меньше — пиши меньше; пустой результат допустим.
+- Дата сообщения указана как date в метаданных. date=unknown означает неизвестную дату: не угадывай её и не считай временем импорта. reply_to и thread связывают сообщения; источники из других чатов не подставляй.
 - Позднее отменённое/изменённое решение описывай в актуальном состоянии, явно отметив изменение при необходимости.
 - Не превращай шутки, предположения и вопросы в решения или факты.
 - Не додумывай отсутствующее. Не пиши «не обсуждалось».

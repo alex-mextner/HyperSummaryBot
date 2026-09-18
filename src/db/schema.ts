@@ -12,7 +12,18 @@ export const messages = sqliteTable(
     content: text("content").notNull(),
     replyToMessageId: integer("reply_to_message_id", { mode: "number" }),
     forwardFromName: text("forward_from_name"),
+    /** Legacy name: time of first ingestion, never the source message time. */
     createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+    sourceCreatedAt: integer("source_created_at", { mode: "timestamp" }),
+    sourceEditedAt: integer("source_edited_at", { mode: "timestamp" }),
+    threadId: integer("thread_id", { mode: "number" }),
+    sourceKind: text("source_kind", { enum: ["legacy", "bot_api", "mtproto", "dump"] })
+      .notNull()
+      .default("legacy"),
+    contentKind: text("content_kind", { enum: ["text", "placeholder", "transcription"] })
+      .notNull()
+      .default("text"),
+    contentVersion: integer("content_version").notNull().default(1),
   },
   (table) => [uniqueIndex("messages_chat_message_unique").on(table.chatId, table.messageId)],
 );

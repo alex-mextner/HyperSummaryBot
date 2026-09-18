@@ -17,7 +17,11 @@ const sharedMockClient = {
   start: mock(() => Promise.resolve()),
   destroy: mock(() => Promise.resolve()),
   resolvePeer: mock(async (chatId: number) => ({ _: "inputPeerChat", chat_id: chatId })),
-  call: mock(async (_params: any) => ({ messages: [] })),
+  call: mock(
+    async (_params: unknown): Promise<{ messages: unknown[]; users?: unknown[] }> => ({
+      messages: [],
+    }),
+  ),
   onNewMessage: createEmitterMock(),
   onEditMessage: createEmitterMock(),
   onDeleteMessage: createEmitterMock(),
@@ -156,7 +160,8 @@ describe("MTProto service", () => {
     });
 
     const result = await importChatHistory(repo, 1, { limit: 10, allowedChatIds });
-    expect(result.skipped).toBeGreaterThan(0);
+    expect(result.skipped + (result.updated ?? 0)).toBeGreaterThan(0);
+    expect(await repo.getRecent(-1, 10)).toHaveLength(1);
   });
 
   test("importChatHistory rejects a source outside the allowlist", async () => {
@@ -341,5 +346,37 @@ describe("MTProto service", () => {
     sharedMockClient.destroy = mock(() => Promise.resolve());
     await shutdownMtProto();
     expect(sharedMockClient.destroy).not.toHaveBeenCalled();
+  });
+  test("historical reimport repairs source dates without a resolved sender name", async () => {
+    await repo.save({
+      chatId: -1,
+      messageId: 100,
+      userId: 42,
+      userName: null,
+      role: "user",
+      content: "historical",
+      replyToMessageId: null,
+      forwardFromName: null,
+    });
+    sharedMockClient.call = mock(async () => ({
+      messages: [
+        {
+          _: "message",
+          id: 100,
+          fromId: { userId: 42 },
+          message: "historical",
+          date: 1700000000,
+          editDate: 1700000010,
+          replyTo: { replyToMsgId: 99, replyToTopId: 97 },
+        },
+      ],
+      users: [],
+    }));
+    await importChatHistory(repo, 1, { limit: 10, allowedChatIds });
+    const result = (await repo.getRecent(-1, 10))[0];
+    expect(result?.sourceCreatedAt?.toISOString()).toBe("2023-11-14T22:13:20.000Z");
+    expect(result?.sourceEditedAt?.toISOString()).toBe("2023-11-14T22:13:30.000Z");
+    expect(result?.threadId).toBe(97);
+    expect(result?.replyToMessageId).toBe(99);
   });
 });

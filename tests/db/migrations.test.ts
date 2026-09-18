@@ -63,7 +63,7 @@ describe("application database migrations", () => {
     expect(first.newlyRecorded).toBe(true);
     expect(second.newlyRecorded).toBe(false);
     expect(second.messagesDeduplicated).toBe(0);
-    expect(count?.count).toBe(1);
+    expect(count?.count).toBe(2);
   });
 
   test("rolls back instead of guessing when an existing table is incompatible", () => {

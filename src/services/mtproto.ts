@@ -1,6 +1,7 @@
 import { TelegramClient, type DeleteMessageUpdate, type Message } from "@mtcute/bun";
 import { prepareMtProtoSessionStorage } from "./mtproto-admin";
 import { loadConfig } from "../config/env";
+import { sourceDate, sameChatReplyId } from "../utils/source-metadata";
 import { MAX_CHAT_HISTORY } from "../config/constants";
 import type { ChatHistoryRepository } from "../db/repositories/chat-history";
 
@@ -82,7 +83,7 @@ export async function importChatHistory(
     accessHash?: unknown;
     allowedChatIds: ReadonlySet<number>;
   },
-): Promise<{ imported: number; skipped: number }> {
+): Promise<{ imported: number; skipped: number; updated?: number }> {
   const client = getClient();
 
   // Start client (uses saved session if available)
@@ -176,12 +177,6 @@ export async function importChatHistory(
     await sleep(2000);
   }
 
-  // Batch dedup: check which message IDs already exist (convert Long objects to Number)
-  const existingIds = await chatHistoryRepo.checkExistsBatch(
-    dbChatId,
-    messages.map((m) => Number(m.id)),
-  );
-
   // Build user ID → display name from userMap collected during getHistory
   // Format: "Имя @ник" when both available, "@ник" when only username, "Имя" when only name
   const userNameMap = new Map<number, string>();
@@ -218,37 +213,26 @@ export async function importChatHistory(
       const resolvedName = fromId?.userId ? userNameMap.get(Number(fromId.userId)) : null;
       const userName = resolvedName ?? (fromId ? String(fromId.userId || fromId.channelId) : null);
 
-      if (existingIds.has(messageId)) {
-        // Update existing record if we now have a better name
-        if (resolvedName) {
-          await chatHistoryRepo.save({
-            chatId: dbChatId,
-            messageId,
-            userId,
-            userName: resolvedName,
-            role: "user",
-            content: msg.message || "[Media/Empty]",
-            replyToMessageId: msg.replyTo?.replyToMsgId ? Number(msg.replyTo.replyToMsgId) : null,
-            forwardFromName: msg.fwdFrom ? String(msg.fwdFrom.fromId || "Forwarded") : null,
-          });
-          updated++;
-          continue;
-        }
-        skipped++;
-        continue;
-      }
-
-      await chatHistoryRepo.save({
+      const saved = await chatHistoryRepo.saveWithOutcome({
         chatId: dbChatId,
         messageId,
         userId,
-        userName,
+        userName: resolvedName ?? userName,
         role: "user",
         content: msg.message || "[Media/Empty]",
-        replyToMessageId: msg.replyTo?.replyToMsgId ? Number(msg.replyTo.replyToMsgId) : null,
-        forwardFromName: msg.fwdFrom ? String(msg.fwdFrom.fromId || "Forwarded") : null,
+        contentKind: msg.message ? "text" : "placeholder",
+        sourceKind: "mtproto",
+        sourceCreatedAt: sourceDate(msg.date),
+        sourceEditedAt: sourceDate(msg.editDate),
+        threadId: msg.replyTo?.replyToTopId ?? null,
+        replyToMessageId: msg.replyTo?.replyToPeerId
+          ? null
+          : sameChatReplyId(msg.replyTo?.replyToMsgId),
+        forwardFromName: msg.fwdFrom ? String(msg.fwdFrom.fromName || "Forwarded") : null,
       });
-      imported++;
+      if (saved.outcome === "inserted") imported++;
+      else if (saved.outcome === "updated") updated++;
+      else skipped++;
     } catch (err) {
       console.error(`[mtproto] Failed to save message ${msg.id}:`, err);
       skipped++;
@@ -256,9 +240,9 @@ export async function importChatHistory(
   }
 
   console.log(
-    `[mtproto] importChatHistory done: mtprotoChatId=${chatId}, dbChatId=${dbChatId}, totalFetched=${messages.length}, imported=${imported}, updated=${updated}, skipped=${skipped}, existingInDb=${existingIds.size}`,
+    `[mtproto] importChatHistory done: mtprotoChatId=${chatId}, dbChatId=${dbChatId}, totalFetched=${messages.length}, imported=${imported}, updated=${updated}, skipped=${skipped}`,
   );
-  return { imported, skipped };
+  return { imported, skipped, updated };
 }
 
 export async function getUserGroups(): Promise<
@@ -406,8 +390,13 @@ async function persistRealtimeMessage(
     userName,
     role: "user",
     content: message.text || "[Media/Empty]",
-    replyToMessageId: message.replyToMessage?.id ?? null,
-    forwardFromName: message.forward?.sender.displayName ?? null,
+    replyToMessageId: sameChatReplyId(message.replyToMessage?.id, message.replyToMessage?.origin),
+    threadId: message.replyToMessage?.threadId ?? null,
+    sourceCreatedAt: sourceDate(message.date),
+    sourceEditedAt: sourceDate(message.editDate),
+    sourceKind: "mtproto",
+    contentKind: message.text ? "text" : "placeholder",
+    forwardFromName: message.forward?.sender?.displayName ?? null,
   });
 
   console.log(`[MTProto] Synced message ${message.id} from chat ${chatId}`);
