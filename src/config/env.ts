@@ -33,6 +33,7 @@ export interface EnvConfig {
   // MTProto (optional — for history import before bot joined)
   MTPROTO_API_ID?: number;
   MTPROTO_API_HASH?: string;
+  MTPROTO_SESSION_PATH: string;
 
   // Admin
   BOT_ADMIN_ID?: number;
@@ -107,6 +108,7 @@ export function loadConfig(): EnvConfig {
       ? Number.parseInt(process.env.MTPROTO_API_ID, 10)
       : undefined,
     MTPROTO_API_HASH: process.env.MTPROTO_API_HASH,
+    MTPROTO_SESSION_PATH: process.env.MTPROTO_SESSION_PATH || "data/mtcute-session",
 
     BOT_ADMIN_ID: parseOwnerUserId(process.env.BOT_ADMIN_ID),
     ALLOWED_CHAT_IDS: parseChatIdList(process.env.ALLOWED_CHAT_IDS),

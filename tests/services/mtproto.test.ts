@@ -15,6 +15,7 @@ function createEmitterMock() {
 // Shared mock client so getClient() singleton always returns the same cached instance
 const sharedMockClient = {
   start: mock(() => Promise.resolve()),
+  destroy: mock(() => Promise.resolve()),
   resolvePeer: mock(async (chatId: number) => ({ _: "inputPeerChat", chat_id: chatId })),
   call: mock(async (_params: any) => ({ messages: [] })),
   onNewMessage: createEmitterMock(),
@@ -55,6 +56,7 @@ import {
   getUserGroups,
   startRealtimeSync,
   isMtProtoConfigured,
+  shutdownMtProto,
 } from "../../src/services/mtproto";
 
 describe("MTProto service", () => {
@@ -320,5 +322,24 @@ describe("MTProto service", () => {
 
     expect(sharedMockClient.onNewMessage.remove.mock.calls).toHaveLength(1);
     expect(await repo.getRecent(-1, 10)).toHaveLength(0);
+  });
+  test("shutdown removes listeners and closes the SDK client", async () => {
+    sharedMockClient.destroy.mockClear();
+    await startRealtimeSync(repo, allowedChatIds);
+    await shutdownMtProto();
+    expect(sharedMockClient.destroy).toHaveBeenCalledTimes(1);
+    expect(sharedMockClient.onNewMessage.remove).toHaveBeenCalled();
+    await shutdownMtProto();
+    expect(sharedMockClient.destroy).toHaveBeenCalledTimes(1);
+  });
+  test("failed SDK destroy still releases the cached singleton", async () => {
+    await startRealtimeSync(repo, allowedChatIds);
+    sharedMockClient.destroy = mock(async () => {
+      throw new Error("synthetic teardown failure");
+    });
+    await expect(shutdownMtProto()).rejects.toThrow("synthetic teardown failure");
+    sharedMockClient.destroy = mock(() => Promise.resolve());
+    await shutdownMtProto();
+    expect(sharedMockClient.destroy).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { TelegramClient, type DeleteMessageUpdate, type Message } from "@mtcute/bun";
+import { prepareMtProtoSessionStorage } from "./mtproto-admin";
 import { loadConfig } from "../config/env";
 import { MAX_CHAT_HISTORY } from "../config/constants";
 import type { ChatHistoryRepository } from "../db/repositories/chat-history";
@@ -15,10 +16,11 @@ function getClient(): TelegramClient {
       throw new Error("MTProto not configured. Set MTPROTO_API_ID and MTPROTO_API_HASH in .env");
     }
 
+    prepareMtProtoSessionStorage(config.MTPROTO_SESSION_PATH);
     _client = new TelegramClient({
       apiId,
       apiHash,
-      storage: "data/mtcute-session",
+      storage: config.MTPROTO_SESSION_PATH,
     });
   }
   return _client;
@@ -498,8 +500,11 @@ export async function shutdownMtProto(): Promise<void> {
   activeRealtimeDispose = null;
   if (!_client) return;
   const client = _client;
-  _client = null;
-  await client.disconnect();
+  try {
+    await client.destroy();
+  } finally {
+    _client = null;
+  }
 }
 
 export async function isMtProtoConfigured(): Promise<boolean> {
