@@ -14,7 +14,14 @@
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitOverride": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    // bun-types imports undici-types without declaring it. Under Bun's global store its real
+    // path never reaches this project, so point it at the isolated linker's hoisted layer.
+    // Hoisted installs have no such directory and fall back to normal resolution.
+    // See tests/config/tsconfig-global-store.test.ts.
+    "paths": {
+      "undici-types": ["./node_modules/.bun/node_modules/undici-types"]
+    }
   },
   "include": ["src/**/*", "migrations/**/*", "tests/**/*"],
   "exclude": ["node_modules", "data"]
