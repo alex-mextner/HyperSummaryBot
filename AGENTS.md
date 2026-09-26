@@ -80,6 +80,9 @@ then run `bun x tsc --noEmit`, `bun run lint`, `bun run fmt:check`, and `bun tes
 Review staged diffs with the provisioned review tooling before committing. Read
 and address real review findings; unavailable reviewers are not successful passes.
 Do not bypass hooks with `--no-verify` or change policy to manufacture green gates.
+The husky hooks also call the global dispatcher (`~/.config/git/run-global-hooks`,
+installed by rig) for the secret scan and main-branch protection; without it
+commits and pushes fail closed.
 Never stage all files without inspecting status. No new production `any` casts,
 raw SQL interpolation from user input, or silently swallowed operational errors.
 

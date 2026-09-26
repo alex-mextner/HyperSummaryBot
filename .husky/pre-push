@@ -1,3 +1,3 @@
-npx lint-staged || exit $?
+#!/bin/sh
 # global-git-hooks-dispatcher — runs every global hook for this event (see agent-tools git-hooks/global-dispatcher)
-"${XDG_CONFIG_HOME:-$HOME/.config}/git/run-global-hooks" pre-commit "$@" || exit $?
+"${XDG_CONFIG_HOME:-$HOME/.config}/git/run-global-hooks" pre-push "$@" || exit $?
