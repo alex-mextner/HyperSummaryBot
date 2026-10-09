@@ -92,9 +92,13 @@ checks. Before migration/reload, verify the actual runtime path and preserve dir
 production changes. Health distinguishes liveness/build identity from true
 readiness, ingestion freshness or successful Telegram delivery.
 
-Production: `www-data@104.248.84.190`, `/var/www/hyper-summary-bot`, Bun/PM2 under
-`/var/www/.bun/bin`, PM2 home `/var/www/.pm2`. Caddy handles HTTPS. Current health
-endpoint: `https://hyper-summary-bot.mextner.com/healthz`.
+Production: home server `odroid` (Odroid N2+, Armbian arm64; `root@odroidn2` over
+Tailscale), `/var/www/hyper-summary-bot` as `www-data`, Bun/PM2 under
+`/var/www/.bun/bin`, PM2 home `/var/www/.pm2` (`pm2-www-data.service` resurrects
+the saved list). Public ingress is the Cloudflare Tunnel `odroid-home`:
+`hyper-summary-bot.mextner.com` → `localhost:3003`. Deploys run on the repo's
+self-hosted runner there; see `docs/operations/deployment.md`. Health endpoint:
+`https://hyper-summary-bot.mextner.com/healthz`.
 
 ## Evidence and housekeeping
 
