@@ -29,12 +29,16 @@ job runs on GitHub-hosted runners, then `deploy` runs on the repo-scoped
 self-hosted runner `odroid-hsb` (labels `odroid`, `hyper-summary-bot`; installed at
 `/var/www/actions-runner-hsb` as `www-data`, systemd unit
 `actions.runner.alex-mextner-HyperSummaryBot.odroid-hsb.service`). It checks out the
-exact tested SHA, installs dependencies, runs `bun run db:migrate`, reloads PM2,
-waits until `/healthz` reports the new `buildSha`, then runs `pm2 save`.
+exact tested SHA, installs dependencies, runs `bun run db:migrate`, reloads PM2
+(with a clean environment, so runner variables such as `RUNNER_TRACKING_ID` never
+reach the bot or the PM2 dump), waits until `/healthz` reports the new `buildSha`,
+then runs `pm2 save`.
 
-The repo is public: fork PRs need maintainer approval for every external
-contributor (`all_external_contributors` policy), and no workflow runs untrusted
-PR code on the self-hosted runner.
+The repo is public. No workflow in the repo runs PR code on the self-hosted runner,
+but a fork PR can add its own workflow that targets it, and that would run as
+`www-data` with access to `.env` and the session. Fork runs need maintainer
+approval for every external contributor (`all_external_contributors` policy):
+never approve a fork run that adds or edits `.github/workflows/*`.
 
 ## Manual operations
 

@@ -24,7 +24,9 @@ jobs:
   deploy:
     needs: test
     # Self-hosted runner on the home server (www-data, /var/www/actions-runner-hsb).
-    # Only push/workflow_dispatch trigger this job, so fork PR code never runs here.
+    # This job only runs on push/workflow_dispatch. Fork PRs could still target the
+    # runner from their own workflow files, so maintainer approval of fork runs is
+    # the boundary: never approve one that adds or edits .github/workflows/*.
     runs-on: [self-hosted, odroid, hyper-summary-bot]
     timeout-minutes: 15
     env:
@@ -39,6 +41,10 @@ jobs:
           APP=/var/www/hyper-summary-bot
           test -d "$APP/.git" && test -f "$APP/.env"
           command -v bun && command -v pm2 && command -v node && command -v curl
+          # Run PM2 with a clean environment: --update-env copies the caller's env into
+          # the app (and the dump), and the runner kills processes carrying this job's
+          # RUNNER_TRACKING_ID when the job ends.
+          pm2() { env -i HOME="$HOME" PM2_HOME="$PM2_HOME" PATH="$PATH" /var/www/.bun/bin/pm2 "$@"; }
           cd "$APP"
           test -z "$(git status --porcelain --untracked-files=no)" || { echo 'tracked production tree is dirty'; exit 1; }
           git fetch origin "$RELEASE_SHA"
