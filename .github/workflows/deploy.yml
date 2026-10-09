@@ -1,4 +1,4 @@
-name: Deploy to DigitalOcean
+name: Deploy to odroid
 on:
   push:
     branches: [main]
@@ -23,33 +23,45 @@ jobs:
       - run: bun run test
   deploy:
     needs: test
-    runs-on: ubuntu-latest
+    # Self-hosted runner on the home server (www-data, /var/www/actions-runner-hsb).
+    # This job only runs on push/workflow_dispatch. Fork PRs could still target the
+    # runner from their own workflow files, so maintainer approval of fork runs is
+    # the boundary: never approve one that adds or edits .github/workflows/*.
+    runs-on: [self-hosted, odroid, hyper-summary-bot]
+    timeout-minutes: 15
+    env:
+      RELEASE_SHA: ${{ github.sha }}
     steps:
       - name: Deploy exact tested SHA
-        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f
-        env:
-          RELEASE_SHA: ${{ github.sha }}
-        with:
-          host: ${{ secrets.DO_HOST }}
-          username: ${{ secrets.DO_USER }}
-          key: ${{ secrets.DO_SSH_KEY }}
-          envs: RELEASE_SHA
-          script_stop: true
-          script: |
-            set -euo pipefail
-            export PATH=/var/www/.bun/bin:/usr/local/bin:/usr/bin:/bin
-            APP=/var/www/hyper-summary-bot
-            BUN=/var/www/.bun/bin/bun
-            PM2=/var/www/.bun/bin/pm2
-            test -d "$APP/.git" && test -x "$BUN" && test -x "$PM2" && test -f "$APP/.env"
-            cd "$APP"
-            test -z "$(git status --porcelain --untracked-files=no)" || { echo 'tracked production tree is dirty'; exit 1; }
-            git fetch origin "$RELEASE_SHA"
-            git checkout --detach "$RELEASE_SHA"
-            test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-            "$BUN" install --frozen-lockfile
-            "$BUN" run db:migrate
-            "$PM2" reload ecosystem.config.js --update-env
-            sleep 3
-            "$PM2" describe hyper-summary-bot | grep -q 'online'
-            test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+        run: |
+          set -euo pipefail
+          # PM2's CLI must run under Node: under Bun it crashes talking to the daemon.
+          export PATH=/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:/usr/local/bin:/usr/bin:/bin
+          export HOME=/var/www PM2_HOME=/var/www/.pm2
+          APP=/var/www/hyper-summary-bot
+          test -d "$APP/.git" && test -f "$APP/.env"
+          command -v bun && command -v pm2 && command -v node && command -v curl
+          # Run PM2 with a clean environment: --update-env copies the caller's env into
+          # the app (and the dump), and the runner kills processes carrying this job's
+          # RUNNER_TRACKING_ID when the job ends.
+          pm2() { env -i HOME="$HOME" PM2_HOME="$PM2_HOME" PATH="$PATH" /var/www/.bun/bin/pm2 "$@"; }
+          cd "$APP"
+          test -z "$(git status --porcelain --untracked-files=no)" || { echo 'tracked production tree is dirty'; exit 1; }
+          git fetch origin "$RELEASE_SHA"
+          git checkout --detach "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          bun install --frozen-lockfile
+          bun run db:migrate
+          pm2 reload ecosystem.config.cjs --update-env
+          deadline=$((SECONDS + 90))
+          while (( SECONDS < deadline )); do
+            if curl -fsS --max-time 3 http://127.0.0.1:3003/healthz | grep -q "\"buildSha\":\"$RELEASE_SHA\""; then
+              pm2 describe hyper-summary-bot | grep -q 'online'
+              # Persist the process list so pm2-www-data.service resurrects the bot after a reboot.
+              pm2 save
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "healthz did not report $RELEASE_SHA within 90s"
+          exit 1
