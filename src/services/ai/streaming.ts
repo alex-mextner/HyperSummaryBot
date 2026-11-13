@@ -1,5 +1,11 @@
 import type OpenAI from "openai";
-import { claudeClient, isClaudeCreditBalanceError, withClaudeCredentials, zaiClient, hfClient } from "./clients";
+import {
+  claudeClient,
+  isClaudeCreditBalanceError,
+  withClaudeCredentials,
+  zaiClient,
+  hfClient,
+} from "./clients";
 import { loadConfig } from "../../config/env";
 import { createLogger } from "../../utils/logger";
 
@@ -21,6 +27,7 @@ export interface StreamCallbacks {
 export interface StreamRoundOptions {
   messages: OpenAI.ChatCompletionMessageParam[];
   tools?: OpenAI.ChatCompletionTool[];
+  /** Requested output allowance; reasoning headroom may raise the total token cap. */
   maxTokens: number;
   temperature?: number;
   fast?: boolean;
@@ -50,7 +57,8 @@ export class AIExecutionError extends Error {
 }
 function classifyError(error: unknown): AIExecutionError {
   if (error instanceof AIExecutionError) return error;
-  if (isClaudeCreditBalanceError(error)) return new AIExecutionError("Claude API credit unavailable", "quota");
+  if (isClaudeCreditBalanceError(error))
+    return new AIExecutionError("Claude API credit unavailable", "quota");
   const status =
     typeof error === "object" &&
     error !== null &&
@@ -128,7 +136,8 @@ function buildChain(fast: boolean): ProviderSlot[] {
   const chain: ProviderSlot[] = [];
   if (config.CLAUDE_API_TOKEN || config.CLAUDE_API_TOKEN2) {
     chain.push({
-      name: "Claude", client: claudeClient,
+      name: "Claude",
+      client: claudeClient,
       model: fast ? config.CLAUDE_FAST_MODEL : config.CLAUDE_MODEL,
     });
   }
@@ -147,11 +156,14 @@ export async function aiStreamRound(
   options: StreamRoundOptions,
   callbacks: StreamCallbacks,
 ): Promise<StreamRoundResult> {
-  const deadlineMs = options.deadlineMs ?? 20_000;
   const maxProviders = options.maxProviders ?? 3;
-  assertBoundedInteger("deadlineMs", deadlineMs, 120_000);
   assertBoundedInteger("maxProviders", maxProviders, 3);
   assertBoundedInteger("maxTokens", options.maxTokens, 32768);
+  const chain = buildChain(options.fast ?? false).slice(0, maxProviders);
+  // Keep the existing ten-second allowance per provider when Claude adds a third slot.
+  // An explicit caller deadline remains the total hard limit.
+  const deadlineMs = options.deadlineMs ?? Math.max(20_000, chain.length * 10_000);
+  assertBoundedInteger("deadlineMs", deadlineMs, 120_000);
   const overall = new AbortController();
   const cancel = () => overall.abort(new AIExecutionError("AI request cancelled", "cancelled"));
   if (options.signal?.aborted) cancel();
@@ -163,7 +175,6 @@ export async function aiStreamRound(
   );
   try {
     checkSignal(overall.signal);
-    const chain = buildChain(options.fast ?? false).slice(0, maxProviders);
     if (chain.length === 0)
       throw new AIExecutionError(
         "No permitted AI provider is configured",
@@ -197,11 +208,15 @@ export async function aiStreamRound(
         checkSignal(overall.signal);
         const failure = classifyError(error);
         lastCode = failure.code;
-        aiLogger.warn({ provider: slot.name, model: slot.model, code: failure.code }, "AI attempt failed");
+        aiLogger.warn(
+          { provider: slot.name, model: slot.model, code: failure.code },
+          "AI attempt failed",
+        );
         // A broken account or retired model cannot succeed on this provider,
         // but an independent provider may still serve the same valid request.
         const canFailOver =
-          failure.retryable || ["authentication", "quota", "http_402", "http_404"].includes(failure.code);
+          failure.retryable ||
+          ["authentication", "quota", "http_402", "http_404"].includes(failure.code);
         if (!canFailOver) throw failure;
         continue;
       } finally {
@@ -242,12 +257,14 @@ async function consumeProvider(
     model: slot.model,
     messages: options.messages,
     tools: options.tools,
-    // Claude's compatible endpoint shares its output allowance with adaptive thinking.
-    max_tokens: slot.name === "Claude"
-      ? options.maxTokens + 8192
-      : requiresReasoning
-        ? Math.max(options.maxTokens, MIN_REASONING_OUTPUT_TOKENS)
-        : options.maxTokens,
+    // Claude's compatible endpoint shares one total allowance across text and adaptive
+    // thinking. This headroom does not impose a separate visible-output token cap.
+    max_tokens:
+      slot.name === "Claude"
+        ? options.maxTokens + 8192
+        : requiresReasoning
+          ? Math.max(options.maxTokens, MIN_REASONING_OUTPUT_TOKENS)
+          : options.maxTokens,
     ...(requiresReasoning ? { reasoning_effort: "low" } : {}),
     ...(slot.name === "Claude" ? {} : { temperature: options.temperature ?? 0.7 }),
     stream: true,

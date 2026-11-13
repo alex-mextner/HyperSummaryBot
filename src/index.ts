@@ -8,6 +8,7 @@ import { initDatabase } from "./db/client";
 import { assertDatabaseReady } from "./db/migrations";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary } from "./agents/summary";
+import { AIExecutionError } from "./services/ai/streaming";
 import { extractNote } from "./agents/note-extractor";
 import {
   buildMessageContent,
@@ -243,12 +244,7 @@ bot.command(
       });
     } catch (error) {
       console.error("Summary error:", error);
-      const errMsg = error instanceof Error ? error.message : "";
-      if (
-        errMsg.includes("401") ||
-        errMsg.includes("token") ||
-        errMsg.includes("All AI providers failed")
-      ) {
+      if (error instanceof AIExecutionError) {
         await deliverDmText(
           bot,
           ctx,
@@ -704,16 +700,8 @@ bot.on("my_chat_member", async (ctx) => {
           });
         } catch (error) {
           console.error("Summary error:", error);
-          const errMsg = error instanceof Error ? error.message : "";
-          if (
-            errMsg.includes("401") ||
-            errMsg.includes("token") ||
-            errMsg.includes("All AI providers failed")
-          ) {
-            await ctx.reply(
-              "❌ AI-сервисы временно недоступны — ключи API устарели.\n" +
-                "Нужно обновить ZAI_API_KEY / HF_TOKEN в .env",
-            );
+          if (error instanceof AIExecutionError) {
+            await ctx.reply("❌ AI-сервисы временно недоступны. Попробуй позже.");
           } else {
             await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
           }
