@@ -1,6 +1,8 @@
 // Set all required environment variables so that modules calling loadConfig() at top level don't crash
 process.env.BOT_TOKEN = "test-bot-token";
 process.env.BOT_USERNAME = "test_bot";
+delete process.env.CLAUDE_API_TOKEN;
+delete process.env.CLAUDE_API_TOKEN2;
 process.env.ZAI_API_KEY = "test-zai-key";
 process.env.ZAI_BASE_URL = "https://test.z.ai";
 process.env.ZAI_MODEL = "test-zai-model";
@@ -9,10 +11,6 @@ process.env.HF_TOKEN = "test-hf-token";
 process.env.HF_BASE_URL = "https://test.hf.co";
 process.env.HF_MODEL = "test-hf-model";
 process.env.HF_FAST_MODEL = "test-hf-fast";
-process.env.GEMINI_API_KEY = "test-gem-key";
-process.env.GEMINI_BASE_URL = "https://test.gemini";
-process.env.GEMINI_MODEL = "test-gem-model";
-process.env.GEMINI_FAST_MODEL = "test-gem-fast";
 
 process.env.GROQ_API_KEY = "test-groq-key";
 process.env.GROQ_MODEL = "test-groq-model";

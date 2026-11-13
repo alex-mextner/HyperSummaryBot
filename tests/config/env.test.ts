@@ -23,6 +23,11 @@ describe("loadConfig", () => {
     "BOT_USERNAME",
     "NODE_ENV",
     "DATABASE_PATH",
+    "CLAUDE_API_TOKEN",
+    "CLAUDE_API_TOKEN2",
+    "CLAUDE_BASE_URL",
+    "CLAUDE_MODEL",
+    "CLAUDE_FAST_MODEL",
     "ZAI_API_KEY",
     "ZAI_BASE_URL",
     "ZAI_MODEL",
@@ -31,10 +36,6 @@ describe("loadConfig", () => {
     "HF_BASE_URL",
     "HF_MODEL",
     "HF_FAST_MODEL",
-    "GEMINI_API_KEY",
-    "GEMINI_BASE_URL",
-    "GEMINI_MODEL",
-    "GEMINI_FAST_MODEL",
     "GROQ_API_KEY",
     "GROQ_MODEL",
     "GROQ_FAST_MODEL",
@@ -54,6 +55,7 @@ describe("loadConfig", () => {
     process.env.BOT_TOKEN = "bot-token";
     process.env.BOT_USERNAME = "testbot";
     process.env.NODE_ENV = "development";
+    for (const k of keys.filter((key) => key.startsWith("CLAUDE_"))) delete process.env[k];
     process.env.ZAI_API_KEY = "zai-key";
     process.env.ZAI_BASE_URL = "https://z.ai";
     process.env.ZAI_MODEL = "zai-model";
@@ -62,10 +64,6 @@ describe("loadConfig", () => {
     process.env.HF_BASE_URL = "https://hf.co";
     process.env.HF_MODEL = "hf-model";
     process.env.HF_FAST_MODEL = "hf-fast";
-    process.env.GEMINI_API_KEY = "gem-key";
-    process.env.GEMINI_BASE_URL = "https://gemini";
-    process.env.GEMINI_MODEL = "gem-model";
-    process.env.GEMINI_FAST_MODEL = "gem-fast";
     process.env.ALLOWED_CHAT_IDS = "-1001,-2";
   });
 
@@ -89,6 +87,16 @@ describe("loadConfig", () => {
     expect(config.ZAI_BASE_URL).toBe("https://z.ai");
     expect(config.ZAI_MODEL).toBe("zai-model");
     expect(config.ALLOWED_CHAT_IDS).toEqual([-1001, -2]);
+  });
+
+  test("defaults to current Claude models and keeps its credential optional", () => {
+    const config = loadConfig();
+    expect(config.CLAUDE_API_TOKEN).toBeUndefined();
+    expect(config.CLAUDE_BASE_URL).toBe("https://api.anthropic.com/v1/");
+    expect(config.CLAUDE_MODEL).toBe("claude-sonnet-5-5");
+    expect(config.CLAUDE_FAST_MODEL).toBe("claude-haiku-5-5");
+    process.env.CLAUDE_API_TOKEN = "  test-claude-key  ";
+    expect(loadConfig().CLAUDE_API_TOKEN).toBe("test-claude-key");
   });
 
   test("reads NODE_ENV and DATABASE_PATH from env", () => {

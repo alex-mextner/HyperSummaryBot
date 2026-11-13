@@ -8,6 +8,8 @@ import { initDatabase } from "./db/client";
 import { assertDatabaseReady } from "./db/migrations";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary } from "./agents/summary";
+import { AIExecutionError } from "./services/ai/streaming";
+import { logger } from "./utils/logger";
 import { extractNote } from "./agents/note-extractor";
 import {
   buildMessageContent,
@@ -243,18 +245,8 @@ bot.command(
       });
     } catch (error) {
       console.error("Summary error:", error);
-      const errMsg = error instanceof Error ? error.message : "";
-      if (
-        errMsg.includes("401") ||
-        errMsg.includes("token") ||
-        errMsg.includes("All AI providers failed")
-      ) {
-        await deliverDmText(
-          bot,
-          ctx,
-          recipientUserId,
-          "❌ AI-сервисы временно недоступны. Попробуй позже.",
-        );
+      if (error instanceof AIExecutionError) {
+        await deliverDmText(bot, ctx, recipientUserId, "❌ Не удалось завершить запрос к AI.");
       } else {
         await deliverDmText(
           bot,
@@ -703,20 +695,14 @@ bot.on("my_chat_member", async (ctx) => {
             allowedChatIds,
           });
         } catch (error) {
-          console.error("Summary error:", error);
-          const errMsg = error instanceof Error ? error.message : "";
-          if (
-            errMsg.includes("401") ||
-            errMsg.includes("token") ||
-            errMsg.includes("All AI providers failed")
-          ) {
-            await ctx.reply(
-              "❌ AI-сервисы временно недоступны — ключи API устарели.\n" +
-                "Нужно обновить ZAI_API_KEY / HF_TOKEN / GEMINI_API_KEY в .env",
-            );
-          } else {
-            await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
-          }
+          logger.error(
+            {
+              err: { name: error instanceof Error ? "Error" : "UnknownFailure" },
+              category: "history_import",
+              chatId: chat.id,
+            },
+            "Background history import failed",
+          );
         }
       })();
     }

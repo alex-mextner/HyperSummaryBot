@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import "../../setup";
-import { zaiClient, hfClient, geminiClient } from "../../../src/services/ai/clients";
+import { zaiClient, hfClient } from "../../../src/services/ai/clients";
 import { aiStreamRound } from "../../../src/services/ai/streaming";
 
 const request = { messages: [{ role: "user" as const, content: "Synthetic test" }], maxTokens: 50 };
@@ -20,8 +20,7 @@ function setCreate(
   (client as any).chat.completions.create = mock(implementation);
 }
 beforeEach(() => {
-  for (const client of [zaiClient(), hfClient(), geminiClient()])
-    setCreate(client, async () => success());
+  for (const client of [zaiClient(), hfClient()]) setCreate(client, async () => success());
 });
 
 describe("AI execution contract", () => {
@@ -77,12 +76,13 @@ describe("AI execution contract", () => {
     expect(JSON.stringify(request)).toBe(original);
   });
 
-  test("structured authentication failures never retry another provider", async () => {
+  test("provider authentication failure permits one independent fallback attempt", async () => {
     setCreate(zaiClient(), async () => {
       throw Object.assign(new Error("401 unauthorized"), { status: 401 });
     });
-    await expect(aiStreamRound(request, {})).rejects.toThrow();
-    expect((hfClient() as any).chat.completions.create).not.toHaveBeenCalled();
+    expect((await aiStreamRound(request, {})).text).toBe("valid");
+    expect(zaiClient().chat.completions.create).toHaveBeenCalledTimes(1);
+    expect(hfClient().chat.completions.create).toHaveBeenCalledTimes(1);
   });
 
   test("truncated output is rejected instead of being presented as complete", async () => {
