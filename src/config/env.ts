@@ -4,7 +4,14 @@ export interface EnvConfig {
   NODE_ENV: "development" | "production";
   DATABASE_PATH: string;
 
-  // AI Primary — z.ai
+  // AI Primary — Claude
+  CLAUDE_API_TOKEN?: string;
+  CLAUDE_API_TOKEN2?: string;
+  CLAUDE_BASE_URL: string;
+  CLAUDE_MODEL: string;
+  CLAUDE_FAST_MODEL: string;
+
+  // AI Fallback — z.ai
   ZAI_API_KEY: string;
   ZAI_BASE_URL: string;
   ZAI_MODEL: string;
@@ -15,12 +22,6 @@ export interface EnvConfig {
   HF_BASE_URL: string;
   HF_MODEL: string;
   HF_FAST_MODEL: string;
-
-  // AI Fallback — Gemini
-  GEMINI_API_KEY: string;
-  GEMINI_BASE_URL: string;
-  GEMINI_MODEL: string;
-  GEMINI_FAST_MODEL: string;
 
   // Optional — Groq
   GROQ_API_KEY?: string;
@@ -83,6 +84,12 @@ export function loadConfig(): EnvConfig {
     NODE_ENV: (process.env.NODE_ENV as EnvConfig["NODE_ENV"]) || "development",
     DATABASE_PATH: process.env.DATABASE_PATH || "./data/hyper-summary.db",
 
+    CLAUDE_API_TOKEN: process.env.CLAUDE_API_TOKEN?.trim() || undefined,
+    CLAUDE_API_TOKEN2: process.env.CLAUDE_API_TOKEN2?.trim() || undefined,
+    CLAUDE_BASE_URL: process.env.CLAUDE_BASE_URL || "https://api.anthropic.com/v1/",
+    CLAUDE_MODEL: process.env.CLAUDE_MODEL || "claude-sonnet-5-5",
+    CLAUDE_FAST_MODEL: process.env.CLAUDE_FAST_MODEL || "claude-haiku-5-5",
+
     ZAI_API_KEY: requireEnv("ZAI_API_KEY"),
     ZAI_BASE_URL: requireEnv("ZAI_BASE_URL"),
     ZAI_MODEL: requireEnv("ZAI_MODEL"),
@@ -92,11 +99,6 @@ export function loadConfig(): EnvConfig {
     HF_BASE_URL: requireEnv("HF_BASE_URL"),
     HF_MODEL: requireEnv("HF_MODEL"),
     HF_FAST_MODEL: requireEnv("HF_FAST_MODEL"),
-
-    GEMINI_API_KEY: requireEnv("GEMINI_API_KEY"),
-    GEMINI_BASE_URL: requireEnv("GEMINI_BASE_URL"),
-    GEMINI_MODEL: requireEnv("GEMINI_MODEL"),
-    GEMINI_FAST_MODEL: requireEnv("GEMINI_FAST_MODEL"),
 
     GROQ_API_KEY: process.env.GROQ_API_KEY,
     GROQ_MODEL: process.env.GROQ_MODEL,

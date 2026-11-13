@@ -1,12 +1,16 @@
 import type OpenAI from "openai";
-import { zaiClient, hfClient, geminiClient } from "./clients";
+import { claudeClient, isClaudeCreditBalanceError, withClaudeCredentials, zaiClient, hfClient } from "./clients";
 import { loadConfig } from "../../config/env";
+import { createLogger } from "../../utils/logger";
+
+const aiLogger = createLogger("ai");
 
 const MAX_TOOL_CALLS = 16;
 const MAX_OUTPUT_CHARS = 131072;
 const MAX_STREAM_FRAMES = 8192;
 const MAX_TOOL_NAME_CHARS = 128;
 const MAX_TOOL_ID_CHARS = 256;
+const MIN_REASONING_OUTPUT_TOKENS = 4096;
 
 export interface StreamCallbacks {
   /** Called only after one complete, validated attempt succeeds. */
@@ -46,6 +50,7 @@ export class AIExecutionError extends Error {
 }
 function classifyError(error: unknown): AIExecutionError {
   if (error instanceof AIExecutionError) return error;
+  if (isClaudeCreditBalanceError(error)) return new AIExecutionError("Claude API credit unavailable", "quota");
   const status =
     typeof error === "object" &&
     error !== null &&
@@ -120,14 +125,17 @@ interface ProviderSlot {
 }
 function buildChain(fast: boolean): ProviderSlot[] {
   const config = loadConfig();
+  const chain: ProviderSlot[] = [];
+  if (config.CLAUDE_API_TOKEN || config.CLAUDE_API_TOKEN2) {
+    chain.push({
+      name: "Claude", client: claudeClient,
+      model: fast ? config.CLAUDE_FAST_MODEL : config.CLAUDE_MODEL,
+    });
+  }
   return [
+    ...chain,
     { name: "z.ai", client: zaiClient, model: fast ? config.ZAI_FAST_MODEL : config.ZAI_MODEL },
     { name: "HF", client: hfClient, model: fast ? config.HF_FAST_MODEL : config.HF_MODEL },
-    {
-      name: "Gemini",
-      client: geminiClient,
-      model: fast ? config.GEMINI_FAST_MODEL : config.GEMINI_MODEL,
-    },
   ];
 }
 function assertBoundedInteger(name: string, value: number, maximum: number): void {
@@ -140,7 +148,7 @@ export async function aiStreamRound(
   callbacks: StreamCallbacks,
 ): Promise<StreamRoundResult> {
   const deadlineMs = options.deadlineMs ?? 20_000;
-  const maxProviders = options.maxProviders ?? 2;
+  const maxProviders = options.maxProviders ?? 3;
   assertBoundedInteger("deadlineMs", deadlineMs, 120_000);
   assertBoundedInteger("maxProviders", maxProviders, 3);
   assertBoundedInteger("maxTokens", options.maxTokens, 32768);
@@ -156,6 +164,11 @@ export async function aiStreamRound(
   try {
     checkSignal(overall.signal);
     const chain = buildChain(options.fast ?? false).slice(0, maxProviders);
+    if (chain.length === 0)
+      throw new AIExecutionError(
+        "No permitted AI provider is configured",
+        "provider_configuration",
+      );
     const originalMessages = structuredClone(options.messages);
     let lastCode = "not_started";
     for (const [index, slot] of chain.entries()) {
@@ -184,8 +197,12 @@ export async function aiStreamRound(
         checkSignal(overall.signal);
         const failure = classifyError(error);
         lastCode = failure.code;
-        console.warn("[ai] attempt failed", { provider: slot.name, code: failure.code });
-        if (!failure.retryable) throw failure;
+        aiLogger.warn({ provider: slot.name, model: slot.model, code: failure.code }, "AI attempt failed");
+        // A broken account or retired model cannot succeed on this provider,
+        // but an independent provider may still serve the same valid request.
+        const canFailOver =
+          failure.retryable || ["authentication", "quota", "http_402", "http_404"].includes(failure.code);
+        if (!canFailOver) throw failure;
         continue;
       } finally {
         clearTimeout(attemptTimer);
@@ -201,7 +218,7 @@ export async function aiStreamRound(
       }
       checkSignal(overall.signal);
       const elapsedMs = Math.round(performance.now() - started);
-      console.log("[ai] completed", { provider: slot.name, model: slot.model, elapsedMs });
+      aiLogger.info({ provider: slot.name, model: slot.model, elapsedMs }, "AI completed");
       return { ...accepted.result, provider: slot.name, model: slot.model, elapsedMs };
     }
     throw new AIExecutionError(`All ${chain.length} AI providers failed (${lastCode})`, lastCode);
@@ -218,18 +235,26 @@ async function consumeProvider(
   deadlineAt: number,
 ): Promise<{ result: StreamRoundResult; deltas: string[] }> {
   checkSignal(signal);
+  const requiresReasoning =
+    (slot.name === "z.ai" && /^glm-5\.3(?:-flash)?$/i.test(slot.model)) ||
+    (slot.name === "HF" && /^Qwen\/Qwen3\.8-2\.4T-A95B(?::[^:]+)?$/i.test(slot.model));
+  const params: OpenAI.ChatCompletionCreateParamsStreaming = {
+    model: slot.model,
+    messages: options.messages,
+    tools: options.tools,
+    // Claude's compatible endpoint shares its output allowance with adaptive thinking.
+    max_tokens: slot.name === "Claude"
+      ? options.maxTokens + 8192
+      : requiresReasoning
+        ? Math.max(options.maxTokens, MIN_REASONING_OUTPUT_TOKENS)
+        : options.maxTokens,
+    ...(requiresReasoning ? { reasoning_effort: "low" } : {}),
+    ...(slot.name === "Claude" ? {} : { temperature: options.temperature ?? 0.7 }),
+    stream: true,
+  };
+  const openStream = (client: OpenAI) => client.chat.completions.create(params, { signal });
   const stream = await abortable(
-    slot.client().chat.completions.create(
-      {
-        model: slot.model,
-        messages: options.messages,
-        tools: options.tools,
-        max_tokens: options.maxTokens,
-        temperature: options.temperature ?? 0.7,
-        stream: true,
-      },
-      { signal },
-    ),
+    slot.name === "Claude" ? withClaudeCredentials(openStream, signal) : openStream(slot.client()),
     signal,
   );
   const iterator = stream[Symbol.asyncIterator]();

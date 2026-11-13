@@ -15,10 +15,6 @@ process.env.HF_TOKEN = process.env.HF_TOKEN || "test";
 process.env.HF_BASE_URL = process.env.HF_BASE_URL || "https://test";
 process.env.HF_MODEL = process.env.HF_MODEL || "test";
 process.env.HF_FAST_MODEL = process.env.HF_FAST_MODEL || "test";
-process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || "test";
-process.env.GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || "https://test";
-process.env.GEMINI_MODEL = process.env.GEMINI_MODEL || "test";
-process.env.GEMINI_FAST_MODEL = process.env.GEMINI_FAST_MODEL || "test";
 
 // Save original env values
 const ORIGINAL_API_ID = process.env.MTPROTO_API_ID;

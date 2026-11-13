@@ -712,7 +712,7 @@ bot.on("my_chat_member", async (ctx) => {
           ) {
             await ctx.reply(
               "❌ AI-сервисы временно недоступны — ключи API устарели.\n" +
-                "Нужно обновить ZAI_API_KEY / HF_TOKEN / GEMINI_API_KEY в .env",
+                "Нужно обновить ZAI_API_KEY / HF_TOKEN в .env",
             );
           } else {
             await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
