@@ -9,6 +9,7 @@ import { assertDatabaseReady } from "./db/migrations";
 import { ChatHistoryRepository } from "./db/repositories/chat-history";
 import { generateSummary } from "./agents/summary";
 import { AIExecutionError } from "./services/ai/streaming";
+import { logger } from "./utils/logger";
 import { extractNote } from "./agents/note-extractor";
 import {
   buildMessageContent,
@@ -245,12 +246,7 @@ bot.command(
     } catch (error) {
       console.error("Summary error:", error);
       if (error instanceof AIExecutionError) {
-        await deliverDmText(
-          bot,
-          ctx,
-          recipientUserId,
-          "❌ AI-сервисы временно недоступны. Попробуй позже.",
-        );
+        await deliverDmText(bot, ctx, recipientUserId, "❌ Не удалось завершить запрос к AI.");
       } else {
         await deliverDmText(
           bot,
@@ -699,12 +695,14 @@ bot.on("my_chat_member", async (ctx) => {
             allowedChatIds,
           });
         } catch (error) {
-          console.error("Summary error:", error);
-          if (error instanceof AIExecutionError) {
-            await ctx.reply("❌ AI-сервисы временно недоступны. Попробуй позже.");
-          } else {
-            await ctx.reply("❌ Ошибка при генерации саммари. Попробуй позже.");
-          }
+          logger.error(
+            {
+              err: { name: error instanceof Error ? "Error" : "UnknownFailure" },
+              category: "history_import",
+              chatId: chat.id,
+            },
+            "Background history import failed",
+          );
         }
       })();
     }
