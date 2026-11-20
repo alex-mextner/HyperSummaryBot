@@ -71,3 +71,39 @@ harness:
   enabled: true
   kind: claude-code
   auto_mode: true
+
+# PR application bytes run only through the installed, bounded stage receiver.
+bot_stage:
+  enabled: true
+  checks:
+  - bun x tsc --noEmit
+  - bun run lint
+  - bun run fmt:check
+  - bun run test
+  dockerfile: .rig/stage.Dockerfile
+  submodules: false
+  policy:
+    id: summary
+    repository: alex-mextner/HyperSummaryBot
+    image: ghcr.io/alex-mextner/hypersummarybot-stage
+    telegram_username: HyperSummaryStageBot
+    architecture: amd64
+    qa: false
+    env_allowlist:
+    - BOT_TOKEN
+    required_env:
+    - BOT_TOKEN
+    defaults:
+      NODE_ENV: production
+      BOT_USERNAME: HyperSummaryStageBot
+      RIG_STAGE_LIMITED: 'true'
+      DATABASE_PATH: /app/data/stage.db
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/cache
+    network_hosts:
+    - api.telegram.org
+    memory_mb: 384
+    cpus: 0.5
+    pids: 128
+    ttl_seconds: 1800
+    redis: false

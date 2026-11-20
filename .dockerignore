@@ -1,0 +1,8 @@
+.git
+node_modules
+.env*
+data
+logs
+.worktrees
+**/*.db
+**/*.session
