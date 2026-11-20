@@ -4,17 +4,26 @@ The bot never asks for phone/OTP/2FA in Telegram messages. Admin login is a loca
 trusted-TTY operation. These scripts recover useful unmerged work from commit
 04ea4a3 and share MTPROTO_SESSION_PATH with the runtime.
 
-1. Stop only `hyper-summary-bot` in PM2 before account administration.
-2. Set `MTPROTO_ADMIN_BOT_STOPPED=YES` and run `bun run mtproto:connect` in the
-   deployment directory. Enter secrets only in the trusted terminal. OTP and
-   password echo is disabled; passwords are not trimmed.
-3. Start the bot and verify its health and authorized message ingestion.
+1. Take the bot down on the production host so nothing restarts it meanwhile: a plain
+   `systemctl stop` isn't enough, because the next deploy and a reboot start it again.
+   Follow "Keeping the bot down" in `deployment.md` (check no deploy is running,
+   disable the runner, then the bot).
 
-For intentional account revocation, keep the bot stopped, set both
-`MTPROTO_ADMIN_BOT_STOPPED=YES` and `CONFIRM_REVOKE_MTPROTO=YES`, and run
-`bun run mtproto:revoke`. This really logs out the session and removes local
-session files; it is not a routine health check. Telegram Settings > Devices is
-an alternative operator revocation surface.
+2. Run the CLI as the checkout's owner, inside the checkout (mode 0750, so `cd` there
+   as `hsb`). Set the flag inside the `sudo` command, because `sudo` drops exported
+   variables:
+   `sudo -u hsb sh -c 'cd /srv/hyper-summary-bot && MTPROTO_ADMIN_BOT_STOPPED=YES exec bun run mtproto:connect'`.
+   Enter secrets only in the trusted terminal. OTP and password echo is disabled;
+   passwords are not trimmed.
+3. Bring the bot and the runner back as in `deployment.md` ("Keeping the bot down"),
+   then verify its health and authorized message ingestion.
+
+For intentional account revocation, take the bot down as in step 1 and run
+`sudo -u hsb sh -c 'cd /srv/hyper-summary-bot && MTPROTO_ADMIN_BOT_STOPPED=YES CONFIRM_REVOKE_MTPROTO=YES exec bun run mtproto:revoke'`.
+This really logs out the session and removes local
+session files; it is not a routine health check. Keep the bot disabled until a new
+login (step 2), then bring the bot and the runner back as in step 3. Telegram
+Settings > Devices is an alternative operator revocation surface.
 
 New session directories use mode 0700; existing session/WAL/SHM files are hardened
 to 0600 without changing permissions of an arbitrary existing parent directory.

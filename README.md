@@ -12,7 +12,7 @@ To run:
 bun run index.ts
 ```
 
-Production runs on the home server `odroid`; see
+Production runs on the home server `bananapi-m4`; see
 [docs/operations/deployment.md](docs/operations/deployment.md).
 
 This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
