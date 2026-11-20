@@ -1,0 +1,36 @@
+{
+  "architecture": "amd64",
+  "build_workflow": ".github/workflows/rig-stage-build.yml",
+  "cpus": 0.5,
+  "default_branch": "main",
+  "defaults": {
+    "BOT_USERNAME": "HyperSummaryStageBot",
+    "DATABASE_PATH": "/app/data/stage.db",
+    "HOME": "/tmp",
+    "NODE_ENV": "production",
+    "RIG_STAGE_LIMITED": "true",
+    "XDG_CACHE_HOME": "/tmp/cache"
+  },
+  "env_allowlist": [
+    "BOT_TOKEN"
+  ],
+  "id": "summary",
+  "image": "ghcr.io/alex-mextner/hypersummarybot-stage",
+  "memory_mb": 384,
+  "network_hosts": [
+    "api.telegram.org"
+  ],
+  "pids": 128,
+  "qa": false,
+  "redis": false,
+  "repository": "alex-mextner/HyperSummaryBot",
+  "required_env": [
+    "BOT_TOKEN"
+  ],
+  "required_workflows": [
+    ".github/workflows/rig-stage-build.yml"
+  ],
+  "telegram_username": "HyperSummaryStageBot",
+  "trusted_build_blob": "f0805ba5caa70d808c8e475a55947b771c7b47fc",
+  "ttl_seconds": 1800
+}

@@ -1,3 +1,4 @@
+// Validate production startup and the explicitly limited isolated stage configuration.
 export interface EnvConfig {
   BOT_TOKEN: string;
   BOT_USERNAME: string;
@@ -50,10 +51,10 @@ export interface EnvConfig {
   TEST_API_PORT: number;
 }
 
-export function requireEnv(name: string): string {
+export function requireEnv(name: string, required = true): string {
   const value = process.env[name];
-  if (!value) throw new Error(`${name} environment variable is required`);
-  return value;
+  if (!value && required) throw new Error(`${name} environment variable is required`);
+  return value || "";
 }
 
 export function parseChatIdList(value: string | undefined): number[] {
@@ -77,7 +78,22 @@ export function parseOwnerUserId(value: string | undefined): number | undefined 
   return id;
 }
 
+/** A deliberately limited stage never needs production provider credentials. */
+function limitedStageEnabled(): boolean {
+  if (process.env.RIG_STAGE_LIMITED !== "true") return false;
+  const username = process.env.BOT_USERNAME ?? "";
+  if (
+    !/^[a-z][a-z0-9_]{4,31}$/i.test(username) ||
+    !/bot$/i.test(username) ||
+    !/stage|stg|test/i.test(username)
+  ) {
+    throw new Error("RIG_STAGE_LIMITED requires a dedicated stage bot username");
+  }
+  return true;
+}
+
 export function loadConfig(): EnvConfig {
+  const requiredExternal = !limitedStageEnabled();
   return {
     BOT_TOKEN: requireEnv("BOT_TOKEN"),
     BOT_USERNAME: requireEnv("BOT_USERNAME"),
@@ -90,15 +106,15 @@ export function loadConfig(): EnvConfig {
     CLAUDE_MODEL: process.env.CLAUDE_MODEL || "claude-sonnet-5-5",
     CLAUDE_FAST_MODEL: process.env.CLAUDE_FAST_MODEL || "claude-haiku-5-5",
 
-    ZAI_API_KEY: requireEnv("ZAI_API_KEY"),
-    ZAI_BASE_URL: requireEnv("ZAI_BASE_URL"),
-    ZAI_MODEL: requireEnv("ZAI_MODEL"),
-    ZAI_FAST_MODEL: requireEnv("ZAI_FAST_MODEL"),
+    ZAI_API_KEY: requireEnv("ZAI_API_KEY", requiredExternal),
+    ZAI_BASE_URL: requireEnv("ZAI_BASE_URL", requiredExternal),
+    ZAI_MODEL: requireEnv("ZAI_MODEL", requiredExternal),
+    ZAI_FAST_MODEL: requireEnv("ZAI_FAST_MODEL", requiredExternal),
 
-    HF_TOKEN: requireEnv("HF_TOKEN"),
-    HF_BASE_URL: requireEnv("HF_BASE_URL"),
-    HF_MODEL: requireEnv("HF_MODEL"),
-    HF_FAST_MODEL: requireEnv("HF_FAST_MODEL"),
+    HF_TOKEN: requireEnv("HF_TOKEN", requiredExternal),
+    HF_BASE_URL: requireEnv("HF_BASE_URL", requiredExternal),
+    HF_MODEL: requireEnv("HF_MODEL", requiredExternal),
+    HF_FAST_MODEL: requireEnv("HF_FAST_MODEL", requiredExternal),
 
     GROQ_API_KEY: process.env.GROQ_API_KEY,
     GROQ_MODEL: process.env.GROQ_MODEL,

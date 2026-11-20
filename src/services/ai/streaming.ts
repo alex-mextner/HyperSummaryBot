@@ -141,11 +141,13 @@ function buildChain(fast: boolean): ProviderSlot[] {
       model: fast ? config.CLAUDE_FAST_MODEL : config.CLAUDE_MODEL,
     });
   }
-  return [
-    ...chain,
-    { name: "z.ai", client: zaiClient, model: fast ? config.ZAI_FAST_MODEL : config.ZAI_MODEL },
-    { name: "HF", client: hfClient, model: fast ? config.HF_FAST_MODEL : config.HF_MODEL },
-  ];
+  const zaiModel = fast ? config.ZAI_FAST_MODEL : config.ZAI_MODEL;
+  if (config.ZAI_API_KEY && config.ZAI_BASE_URL && zaiModel)
+    chain.push({ name: "z.ai", client: zaiClient, model: zaiModel });
+  const hfModel = fast ? config.HF_FAST_MODEL : config.HF_MODEL;
+  if (config.HF_TOKEN && config.HF_BASE_URL && hfModel)
+    chain.push({ name: "HF", client: hfClient, model: hfModel });
+  return chain;
 }
 function assertBoundedInteger(name: string, value: number, maximum: number): void {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
