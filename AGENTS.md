@@ -65,8 +65,9 @@ callback_data to 64 bytes. Preserve safe HTML/entity-aware chunking; do not slic
 arbitrary tags. Handle per-chat/global rate limits using returned retry_after,
 not rapid edit loops. Verify current Bot API limits before changing delivery.
 The bot never accepts account phone/OTP/2FA in chat. Trusted-terminal account
-administration is documented in `docs/operations/mtproto-admin.md`; stop the bot
-before using its shared session. Do not run a second SDK client against a live
+administration is documented in `docs/operations/mtproto-admin.md`; keep the bot
+down as in "Keeping the bot down" in `docs/operations/deployment.md` (a plain stop is
+not enough) before using its shared session. Do not run a second SDK client against a live
 session. Shutdown disposes exact listeners and destroys the SDK client.
 
 ## Development and release gates
@@ -92,10 +93,10 @@ checks. Before migration/reload, verify the actual runtime path and preserve dir
 production changes. Health distinguishes liveness/build identity from true
 readiness, ingestion freshness or successful Telegram delivery.
 
-Production: home server `odroid` (Odroid N2+, Armbian arm64; `root@odroidn2` over
-Tailscale), `/var/www/hyper-summary-bot` as `www-data`, Bun/PM2 under
-`/var/www/.bun/bin`, PM2 home `/var/www/.pm2` (`pm2-www-data.service` resurrects
-the saved list). Public ingress is the Cloudflare Tunnel `odroid-home`:
+Production: home server `bananapi-m4` (Banana Pi BPI-M4, Armbian arm64, 2 GB RAM;
+`root@bananapi-m4` over Tailscale), `/srv/hyper-summary-bot` as `hsb`, run by the
+systemd unit `hyper-summary-bot.service` with Bun 1.4.2 (`/usr/local/bin/bun`), logs in
+the journal. Public ingress is the Cloudflare Tunnel `bananapi-m4`:
 `hyper-summary-bot.mextner.com` → `localhost:3003`. Deploys run on the repo's
 self-hosted runner there; see `docs/operations/deployment.md`. Health endpoint:
 `https://hyper-summary-bot.mextner.com/healthz`.

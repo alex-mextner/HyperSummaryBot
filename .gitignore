@@ -13,9 +13,8 @@ dist/
 .env.local
 .env.*.local
 
-# Data and logs
+# Data
 data/
-logs/
 *.db
 *.db-journal
 *.db-shm

@@ -1,13 +1,18 @@
-name: Deploy to odroid
+name: Deploy to bananapi-m4
 on:
   push:
     branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
+# Only main deploys, so only main runs share the deploy group: a manual run from another
+# branch would otherwise replace (cancel) a main deploy waiting in it.
 concurrency:
-  group: production-deploy
+  group: ${{ github.ref == 'refs/heads/main' && 'production-deploy' || format('ci-{0}', github.ref) }}
   cancel-in-progress: false
+env:
+  # CI tests with this Bun; the deploy refuses a different runtime Bun.
+  BUN_VERSION: 1.4.2
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.4.2
+          bun-version: ${{ env.BUN_VERSION }}
       - run: bun install --frozen-lockfile
       - run: bun x tsc --noEmit
       - run: bun run lint
@@ -23,11 +28,14 @@ jobs:
       - run: bun run test
   deploy:
     needs: test
-    # Self-hosted runner on the home server (www-data, /var/www/actions-runner-hsb).
+    # Self-hosted runner `bananapi-hsb` on the home server bananapi-m4 (user hsb,
+    # /var/lib/hsb/actions-runner); docs/operations/deployment.md.
     # This job only runs on push/workflow_dispatch. Fork PRs could still target the
     # runner from their own workflow files, so maintainer approval of fork runs is
     # the boundary: never approve one that adds or edits .github/workflows/*.
-    runs-on: [self-hosted, odroid, hyper-summary-bot]
+    runs-on: [self-hosted, bananapi-m4, hyper-summary-bot]
+    # A manual run from another branch would deploy and migrate unmerged code.
+    if: github.ref == 'refs/heads/main'
     timeout-minutes: 15
     env:
       RELEASE_SHA: ${{ github.sha }}
@@ -35,33 +43,44 @@ jobs:
       - name: Deploy exact tested SHA
         run: |
           set -euo pipefail
-          # PM2's CLI must run under Node: under Bun it crashes talking to the daemon.
-          export PATH=/var/www/.nvm/versions/node/v22.17.0/bin:/var/www/.bun/bin:/usr/local/bin:/usr/bin:/bin
-          export HOME=/var/www PM2_HOME=/var/www/.pm2
-          APP=/var/www/hyper-summary-bot
-          test -d "$APP/.git" && test -f "$APP/.env"
-          command -v bun && command -v pm2 && command -v node && command -v curl
-          # Run PM2 with a clean environment: --update-env copies the caller's env into
-          # the app (and the dump), and the runner kills processes carrying this job's
-          # RUNNER_TRACKING_ID when the job ends.
-          pm2() { env -i HOME="$HOME" PM2_HOME="$PM2_HOME" PATH="$PATH" /var/www/.bun/bin/pm2 "$@"; }
+          export PATH=/usr/local/bin:/usr/bin:/bin
+          APP=/srv/hyper-summary-bot
+          UNIT=hyper-summary-bot.service
+          # One check per line: set -e ignores a failure before the last command of an && list.
+          test -d "$APP/.git"
+          test -f "$APP/.env"
+          # The runtime Bun (homelab repo) must be the one the test job uses.
+          bun_version=$(bun --version || true)
+          test "$bun_version" = "$BUN_VERSION" || { echo "bun '$bun_version' is not the tested $BUN_VERSION"; exit 1; }
+          command -v curl
+          # A disabled unit would pass this deploy and then stay down after the next reboot;
+          # is-enabled exits 0 for static/enabled-runtime too, so compare the state.
+          [ "$(systemctl is-enabled "$UNIT")" = enabled ] || { echo "$UNIT is not enabled"; exit 1; }
+          # This exact command is the runner user's only root right (sudoers hsb-deploy), so
+          # the check and the restart below share one array. Fail before touching the
+          # checkout if the rule (homelab repo) drifted.
+          restart=(/usr/bin/systemctl restart "$UNIT")
+          sudo -n -l "${restart[@]}" >/dev/null || { echo "sudoers hsb-deploy does not allow ${restart[*]}"; exit 1; }
           cd "$APP"
+          # Unit state for the job log on any failure from here on (no journal lines: the log is public).
+          unit_status() { systemctl status --no-pager --lines=0 "$UNIT" || true; }
+          trap unit_status ERR
           test -z "$(git status --porcelain --untracked-files=no)" || { echo 'tracked production tree is dirty'; exit 1; }
           git fetch origin "$RELEASE_SHA"
           git checkout --detach "$RELEASE_SHA"
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           bun install --frozen-lockfile
           bun run db:migrate
-          pm2 reload ecosystem.config.cjs --update-env
+          # systemd runs the bot, so it never carries this job's RUNNER_TRACKING_ID.
+          sudo -n "${restart[@]}"
           deadline=$((SECONDS + 90))
           while (( SECONDS < deadline )); do
             if curl -fsS --max-time 3 http://127.0.0.1:3003/healthz | grep -q "\"buildSha\":\"$RELEASE_SHA\""; then
-              pm2 describe hyper-summary-bot | grep -q 'online'
-              # Persist the process list so pm2-www-data.service resurrects the bot after a reboot.
-              pm2 save
+              systemctl is-active --quiet "$UNIT"
               exit 0
             fi
             sleep 2
           done
           echo "healthz did not report $RELEASE_SHA within 90s"
+          unit_status
           exit 1
